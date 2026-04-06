@@ -92,6 +92,7 @@ public class DiceBox3D : MonoBehaviour
         var camGO = GameObject.Find("BoardCamera");
         if (camGO != null) _boardCamera = camGO.GetComponent<Camera>();
         _diceController = FindObjectOfType<DiceController>();
+        _turnManager = FindObjectOfType<TurnManager>();
 
 
         // 정렬 위치: 보드 가시 너비의 80% 안에 5개 균등 배치
@@ -532,12 +533,50 @@ public class DiceBox3D : MonoBehaviour
         ApplyState(i);
     }
 
+    bool CanLocalInteractWithOverlay()
+    {
+        if (_turnManager == null) _turnManager = FindObjectOfType<TurnManager>();
+        return _turnManager == null || _turnManager.CanLocalManipulateDice();
+    }
+
+    void RestoreOverlayToBoardRow(RectTransform overlayRect)
+    {
+        if (overlayParent == null || overlayRect == null) return;
+
+        overlayRect.SetParent(overlayParent, false);
+        overlayRect.localScale = Vector3.one;
+        overlayRect.localRotation = Quaternion.identity;
+        overlayRect.anchorMin = new Vector2(0.5f, 0.5f);
+        overlayRect.anchorMax = new Vector2(0.5f, 0.5f);
+        overlayRect.pivot = new Vector2(0.5f, 0.5f);
+        overlayRect.anchoredPosition = Vector2.zero;
+        overlayRect.SetAsLastSibling();
+
+        UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(overlayParent);
+    }
+
+    void HideCupDiceForOverlayStates()
+    {
+        if (_diceController == null) return;
+
+        for (int i = 0; i < _cupDice.Length; i++)
+        {
+            if (_cupDice[i] == null || i >= _diceController.Dice.Length) continue;
+
+            var state = _diceController.Dice[i].State;
+            if (state == DiceState.OnBoard || state == DiceState.Kept)
+                _cupDice[i].gameObject.SetActive(false);
+        }
+    }
+
     // ── 공개 API ─────────────────────────────────────────────────────
     // 킵 상태만 표시 — 3D 이동 없이 머티리얼만 변경, 컵 주사위 동기화
     public void SetDiceKept(int index, bool kept)
     {
         if (index < 0 || index >= _dice.Length) return;
+        if (!CanLocalInteractWithOverlay()) return;
         SetState(index, kept ? DiceState.Kept : DiceState.OnBoard);
+        HideCupDiceForOverlayStates();
     }
 
     public void ResetAllDice()
@@ -669,6 +708,7 @@ public class DiceBox3D : MonoBehaviour
 
     private Camera          _boardCamera;
     private DiceController  _diceController;
+    private TurnManager     _turnManager;
     private bool            _diceClickable = false;
 
     [Header("오버레이 좌표 기준 RawImage")]
@@ -937,12 +977,14 @@ public class DiceBox3D : MonoBehaviour
 
             _overlays[i] = img;
         }
+
+        HideCupDiceForOverlayStates();
     }
 
     void OnOverlayClicked(int diceIndex, UnityEngine.UI.Image overlay)
     {
         Debug.Log($"[DiceBox3D] OnOverlayClicked({diceIndex}) — _diceClickable={_diceClickable}");
-        if (!_diceClickable) return;
+        if (!_diceClickable || !CanLocalInteractWithOverlay()) return;
 
         // 빈 DiceSlot 탐색 (비활성 포함, X 위치 오름차순 = 왼쪽부터)
         var slots = FindObjectsOfType<DiceSlot>(true);
@@ -1012,13 +1054,16 @@ public class DiceBox3D : MonoBehaviour
 
     void OnOverlayReturnClicked(int diceIndex, UnityEngine.UI.Image overlay, DiceSlot slot)
     {
+        if (!CanLocalInteractWithOverlay()) return;
+
         slot.OnOverlayExit();
         slot.Clear();
         SetState(diceIndex, DiceState.OnBoard);
-
-        overlay.rectTransform.SetParent(overlayParent, false);
+        RestoreOverlayToBoardRow(overlay.rectTransform);
+        HideCupDiceForOverlayStates();
 
         var btn = overlay.GetComponent<UnityEngine.UI.Button>();
+        btn.interactable = true;
         btn.onClick.RemoveAllListeners();
         btn.onClick.AddListener(() => OnOverlayClicked(diceIndex, overlay));
     }

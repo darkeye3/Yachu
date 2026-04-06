@@ -3,6 +3,6 @@
 /// </summary>
 public static class AppVersion
 {
-    public const string Version = "0.1.14";
+    public const string Version = "0.1.20";
     public const string Display = "v" + Version;
 }

@@ -1,129 +1,132 @@
 using System.Collections;
 using System.Collections.Generic;
-using UnityEngine;
 using Photon.Pun;
+using UnityEngine;
 
 public class TurnManager : MonoBehaviour
 {
-    // ─── State Enum ──────────────────────────────────────────────────
     public enum State
     {
-        TurnStart,       // Initialize + show banner. All input blocked
-        WaitingToRoll,   // Cup active (up to 3 rolls). Only cup is interactable
-        Rolling,         // From cup press ~ dice lineup complete. All input blocked
-        WaitingForChoice,// After roll. Can roll again or register (rollCount 1~2)
-        MustRegister,    // rollCount=3 reached. Must register a score
-        Registering,     // Waiting for score category click
-        TurnEnd,         // Score confirmed, transitioning
-        GameOver         // All categories filled
+        TurnStart,
+        WaitingToRoll,
+        Rolling,
+        WaitingForChoice,
+        MustRegister,
+        Registering,
+        TurnEnd,
+        GameOver
     }
+
     public State CurrentState { get; private set; } = State.TurnStart;
 
-    // ─── Inspector 연결 ──────────────────────────────────────────────
-    [SerializeField] private DiceController       diceCtrl;
-    [SerializeField] private DiceCup              diceCup;
-    [SerializeField] private UICupShaker          uiCupShaker;
-    [SerializeField] private ScoreBoardUI         scoreBoardUI;
-    [SerializeField] private TimerUI              timerUI;
-    [SerializeField] private TurnToken            turnToken;
-    [SerializeField] private RegisterButton       registerBtn;
-    [SerializeField] private TurnBannerUI         turnBanner;
-    [SerializeField] private CelebrationBannerUI  celebrationBanner;
-    [SerializeField] private GameSettings         settings;
+    [SerializeField] private DiceController      diceCtrl;
+    [SerializeField] private DiceCup             diceCup;
+    [SerializeField] private UICupShaker         uiCupShaker;
+    [SerializeField] private ScoreBoardUI        scoreBoardUI;
+    [SerializeField] private TimerUI             timerUI;
+    [SerializeField] private TurnToken           turnToken;
+    [SerializeField] private RegisterButton      registerBtn;
+    [SerializeField] private TurnBannerUI        turnBanner;
+    [SerializeField] private CelebrationBannerUI celebrationBanner;
+    [SerializeField] private GameSettings        settings;
 
-    // ─── 런타임 ──────────────────────────────────────────────────────
     private List<PlayerData> _players;
-    private int              _currentPlayerIndex;
-    private int              _currentRound;
+    private int _currentPlayerIndex;
+    private int _currentRound;
+    private int _turnSerial = 1;
+    private bool _waitingForScoreConfirmation;
 
     public PlayerData CurrentPlayer => _players[_currentPlayerIndex];
+    public int CurrentTurnSerial => _turnSerial;
 
-    // ─── Awake ───────────────────────────────────────────────────────
     void Awake()
     {
         if (diceCtrl == null) diceCtrl = FindObjectOfType<DiceController>();
-        if (diceCtrl != null)
-        {
-            diceCtrl.OnRollStart    += OnDiceRollStart;
-            diceCtrl.OnRollComplete += OnRollComplete;
-        }
+        SubscribeDiceEvents();
     }
 
     void OnDestroy()
     {
         if (diceCtrl != null)
         {
-            diceCtrl.OnRollStart    -= OnDiceRollStart;
+            diceCtrl.OnRollStart -= OnDiceRollStart;
             diceCtrl.OnRollComplete -= OnRollComplete;
         }
+
         if (scoreBoardUI != null) scoreBoardUI.OnCategorySelected -= OnCategorySelected;
-        if (registerBtn  != null) registerBtn.OnRegisterClicked   -= OnRegisterClicked;
-        if (timerUI      != null) timerUI.OnTimeUp                -= OnTimeUp;
+        if (registerBtn != null) registerBtn.OnRegisterClicked -= OnRegisterClicked;
+        if (timerUI != null) timerUI.OnTimeUp -= OnTimeUp;
     }
 
-    // ─── 초기화 ──────────────────────────────────────────────────────
     void Start()
     {
-        _currentRound       = 1;
+        _currentRound = 1;
         _currentPlayerIndex = 0;
+        _turnSerial = 1;
         StartCoroutine(InitCoroutine());
     }
 
     IEnumerator InitCoroutine()
     {
-        yield return null;  // 모든 Start() 완료 대기
+        yield return null;
 
-        if (diceCtrl     == null) diceCtrl     = FindObjectOfType<DiceController>();
-        if (diceCup      == null) diceCup      = FindObjectOfType<DiceCup>();
-        if (uiCupShaker  == null) uiCupShaker  = FindObjectOfType<UICupShaker>();
+        if (diceCtrl == null) diceCtrl = FindObjectOfType<DiceController>();
+        if (diceCup == null) diceCup = FindObjectOfType<DiceCup>();
+        if (uiCupShaker == null) uiCupShaker = FindObjectOfType<UICupShaker>();
         if (scoreBoardUI == null) scoreBoardUI = FindObjectOfType<ScoreBoardUI>(true);
-        if (timerUI      == null) timerUI      = FindObjectOfType<TimerUI>();
-        if (registerBtn  == null) registerBtn  = FindObjectOfType<RegisterButton>();
-        if (turnToken    == null) turnToken    = FindObjectOfType<TurnToken>();
-        if (turnBanner        == null) turnBanner        = FindObjectOfType<TurnBannerUI>(true);
+        if (timerUI == null) timerUI = FindObjectOfType<TimerUI>();
+        if (registerBtn == null) registerBtn = FindObjectOfType<RegisterButton>();
+        if (turnToken == null) turnToken = FindObjectOfType<TurnToken>();
+        if (turnBanner == null) turnBanner = FindObjectOfType<TurnBannerUI>(true);
         if (celebrationBanner == null) celebrationBanner = FindObjectOfType<CelebrationBannerUI>(true);
 
-        if (diceCtrl != null && !IsSubscribed())
-        {
-            diceCtrl.OnRollStart    += OnDiceRollStart;
-            diceCtrl.OnRollComplete += OnRollComplete;
-        }
+        SubscribeDiceEvents();
 
         if (scoreBoardUI != null) scoreBoardUI.OnCategorySelected += OnCategorySelected;
-        if (registerBtn  != null) registerBtn.OnRegisterClicked   += OnRegisterClicked;
-        if (timerUI      != null) timerUI.OnTimeUp                += OnTimeUp;
+        if (registerBtn != null) registerBtn.OnRegisterClicked += OnRegisterClicked;
+        if (timerUI != null) timerUI.OnTimeUp += OnTimeUp;
 
-        // 플레이어 데이터
         if (GameManager.Instance != null)
         {
             _players = GameManager.Instance.Players;
             settings = GameManager.Instance.Settings;
             if (_players != null)
+            {
                 foreach (var p in _players)
                     if (p.scores == null) p.Init(8);
+            }
         }
 
         if (_players == null || _players.Count == 0)
         {
-            var p0 = new PlayerData { name = "플레이어1" };
-            var p1 = new PlayerData { name = "플레이어2" };
+            var p0 = new PlayerData { name = "Player1" };
+            var p1 = new PlayerData { name = "Player2" };
+
             if (PhotonNetwork.InRoom)
+            {
                 foreach (var pp in PhotonNetwork.PlayerList)
                 {
                     if (pp.IsMasterClient) p0.name = pp.NickName;
-                    else                   p1.name = pp.NickName;
+                    else p1.name = pp.NickName;
                 }
-            p0.Init(8); p1.Init(8);
+            }
+
+            p0.Init(8);
+            p1.Init(8);
             _players = new List<PlayerData> { p0, p1 };
         }
 
         if (settings == null)
         {
-            Debug.LogWarning("[TurnManager] GameSettings 없음 — 기본값 사용");
+            Debug.LogWarning("[TurnManager] GameSettings missing, using runtime default.");
             settings = ScriptableObject.CreateInstance<GameSettings>();
         }
 
-        if (scoreBoardUI == null) { Debug.LogError("[TurnManager] scoreBoardUI 없음!"); yield break; }
+        if (scoreBoardUI == null)
+        {
+            Debug.LogError("[TurnManager] scoreBoardUI missing.");
+            yield break;
+        }
 
         scoreBoardUI.Build(_players);
         scoreBoardUI.UpdateRound(_currentRound, settings.totalRounds);
@@ -132,17 +135,22 @@ public class TurnManager : MonoBehaviour
         BeginTurn();
     }
 
-    // Check if already subscribed (prevent double subscription)
-    bool IsSubscribed() => diceCtrl != null && diceCtrl.OnRollComplete != null;
+    void SubscribeDiceEvents()
+    {
+        if (diceCtrl == null) return;
 
-    // ─── 핵심: 상태 전환 — 모든 UI 제어가 여기서만 ───────────────────
+        diceCtrl.OnRollStart -= OnDiceRollStart;
+        diceCtrl.OnRollComplete -= OnRollComplete;
+        diceCtrl.OnRollStart += OnDiceRollStart;
+        diceCtrl.OnRollComplete += OnRollComplete;
+    }
+
     void ChangeState(State next)
     {
         CurrentState = next;
-        bool my        = IsMyTurn();
-        bool rollsLeft = diceCtrl != null && diceCtrl.RollCount < (settings?.maxRollCount ?? 3);
+        bool myTurn = IsMyTurn();
 
-        Debug.Log($"[TurnManager] 상태 → {next} | player={_currentPlayerIndex} myTurn={my} rollCount={diceCtrl?.RollCount}");
+        Debug.Log($"[TurnManager] State={next} player={_currentPlayerIndex} myTurn={myTurn} rollCount={diceCtrl?.RollCount}");
 
         switch (next)
         {
@@ -154,9 +162,9 @@ public class TurnManager : MonoBehaviour
                 break;
 
             case State.WaitingToRoll:
-                if (my) timerUI?.StartTimer(settings.turnTimeLimit);
-                SetCupActive(my);
-                if (my) diceCup?.SetFirstRollHint(diceCtrl.RollCount == 0);
+                timerUI?.StartTimer(settings.turnTimeLimit);
+                SetCupActive(myTurn);
+                if (myTurn) diceCup?.SetFirstRollHint(diceCtrl.RollCount == 0);
                 registerBtn?.SetInteractable(false);
                 scoreBoardUI?.SetScoringMode(_currentPlayerIndex, false);
                 break;
@@ -171,16 +179,14 @@ public class TurnManager : MonoBehaviour
                 break;
 
             case State.WaitingForChoice:
-                // Cup is activated separately after celebration banner check (in OnRollComplete)
-                if (my) timerUI?.StartTimer(settings.turnTimeLimit);
+                timerUI?.StartTimer(settings.turnTimeLimit);
                 SetCupActive(false);
-                registerBtn?.SetInteractable(my);
-                if (my) diceCtrl?.SetDiceInteractable(true);
+                registerBtn?.SetInteractable(myTurn && !_waitingForScoreConfirmation);
+                if (myTurn) diceCtrl?.SetDiceInteractable(!_waitingForScoreConfirmation);
                 break;
 
             case State.MustRegister:
-                // No cup, scoreboard only (activated after celebration banner check)
-                if (my) timerUI?.StartTimer(settings.turnTimeLimit);
+                timerUI?.StartTimer(settings.turnTimeLimit);
                 SetCupActive(false);
                 registerBtn?.SetInteractable(false);
                 diceCtrl?.SetDiceInteractable(false);
@@ -190,7 +196,7 @@ public class TurnManager : MonoBehaviour
                 SetCupActive(false);
                 registerBtn?.SetInteractable(false);
                 diceCtrl?.SetDiceInteractable(false);
-                scoreBoardUI?.SetScoringMode(_currentPlayerIndex, my);
+                scoreBoardUI?.SetScoringMode(_currentPlayerIndex, myTurn && !_waitingForScoreConfirmation);
                 break;
 
             case State.TurnEnd:
@@ -218,17 +224,22 @@ public class TurnManager : MonoBehaviour
         return _currentPlayerIndex == GameManager.Instance.LocalPlayerIndex;
     }
 
-    // ─── 턴 시작 ─────────────────────────────────────────────────────
+    public bool CanLocalManipulateDice()
+    {
+        return IsMyTurn() && CurrentState == State.WaitingForChoice && !_waitingForScoreConfirmation;
+    }
+
     void BeginTurn()
     {
-        Debug.Log($"[TurnManager] BeginTurn — 라운드={_currentRound} 플레이어[{_currentPlayerIndex}]={CurrentPlayer?.name}");
+        Debug.Log($"[TurnManager] BeginTurn round={_currentRound} playerIndex={_currentPlayerIndex} turnSerial={_turnSerial}");
 
+        _waitingForScoreConfirmation = false;
         ChangeState(State.TurnStart);
         diceCtrl?.ResetForNewTurn();
 
-        scoreBoardUI.SetActivePlayer(_currentPlayerIndex);
-        scoreBoardUI.ClearAllPreviews(_currentPlayerIndex);
-        registerBtn?.SetLabel("족보 등록");
+        scoreBoardUI?.SetActivePlayer(_currentPlayerIndex);
+        scoreBoardUI?.ClearAllPreviews(_currentPlayerIndex);
+        registerBtn?.SetLabel("점수 등록");
         turnToken?.Refresh(CurrentPlayer.avatarSprite);
 
         if (turnBanner != null)
@@ -244,18 +255,16 @@ public class TurnManager : MonoBehaviour
             StartCoroutine(AITurnCoroutine());
             return;
         }
+
         ChangeState(State.WaitingToRoll);
     }
 
-    // ─── Roll Start (DiceController.OnRollStart) ─────────────────────
     void OnDiceRollStart()
     {
-        // ForceRollThenScore calls ChangeState(Rolling) first, skip duplicate
         if (CurrentState != State.Rolling)
             ChangeState(State.Rolling);
     }
 
-    // ─── 굴리기 완료 (DiceController.OnRollComplete) ─────────────────
     void OnRollComplete()
     {
         bool rollsLeft = diceCtrl.RollCount < (settings?.maxRollCount ?? 3);
@@ -263,39 +272,34 @@ public class TurnManager : MonoBehaviour
         if (rollsLeft)
         {
             ChangeState(State.WaitingForChoice);
-            if (IsMyTurn())
-            {
-                bool bannerShown = ShowScorePreviews(() => SetCupActive(true));
-                if (!bannerShown) SetCupActive(true);
-                diceCup?.UpdateRollCountBadge();
-                uiCupShaker?.UpdateRollCountBadge();
-            }
+            bool bannerShown = ShowScorePreviews(IsMyTurn() ? (() => SetCupActive(true)) : null);
+            if (IsMyTurn() && !bannerShown) SetCupActive(true);
+            diceCup?.UpdateRollCountBadge();
+            uiCupShaker?.UpdateRollCountBadge();
         }
         else
         {
             ChangeState(State.MustRegister);
-            if (IsMyTurn())
-            {
-                bool bannerShown = ShowScorePreviews(() => scoreBoardUI?.SetScoringMode(_currentPlayerIndex, true));
-                if (!bannerShown) scoreBoardUI?.SetScoringMode(_currentPlayerIndex, true);
-                diceCup?.UpdateRollCountBadge();
-                uiCupShaker?.UpdateRollCountBadge();
-            }
+            bool bannerShown = ShowScorePreviews(IsMyTurn() ? (() => scoreBoardUI?.SetScoringMode(_currentPlayerIndex, true)) : null);
+            if (IsMyTurn() && !bannerShown) scoreBoardUI?.SetScoringMode(_currentPlayerIndex, true);
+            diceCup?.UpdateRollCountBadge();
+            uiCupShaker?.UpdateRollCountBadge();
         }
     }
 
-    // ─── 점수 미리보기 + 축하 배너 ───────────────────────────────────
-    // 배너가 표시되면 true 반환, onComplete는 배너 종료 후 호출
     bool ShowScorePreviews(System.Action onComplete = null)
     {
         if (scoreBoardUI == null) return false;
+
         scoreBoardUI.ShowPreviews(_currentPlayerIndex, diceCtrl.CurrentValues);
 
         if (celebrationBanner == null) return false;
+
         bool[] recorded = scoreBoardUI.GetRecordedFlags(_currentPlayerIndex);
         for (int cat = 7; cat >= 5; cat--)
         {
             if (cat >= recorded.Length || recorded[cat]) continue;
+
             int score = ScoreCalculator.Calculate(cat, diceCtrl.CurrentValues);
             if (score > 0)
             {
@@ -303,46 +307,63 @@ public class TurnManager : MonoBehaviour
                 return true;
             }
         }
+
         return false;
     }
 
-    // ─── 등록 버튼 ───────────────────────────────────────────────────
     void OnRegisterClicked()
     {
         if (CurrentState != State.WaitingForChoice) return;
         ChangeState(State.Registering);
     }
 
-    // ─── Category Selected ───────────────────────────────────────────
     void OnCategorySelected(int categoryIndex, int playerIndex)
     {
         if (CurrentState != State.WaitingForChoice &&
             CurrentState != State.Registering &&
             CurrentState != State.MustRegister) return;
+
         if (playerIndex != _currentPlayerIndex) return;
+        if (!IsMyTurn()) return;
 
-        int score = ScoreCalculator.Calculate(categoryIndex, diceCtrl.CurrentValues);
-        _players[_currentPlayerIndex].scores[categoryIndex] = score;
-        scoreBoardUI.ConfirmScore(categoryIndex, _currentPlayerIndex, score);
-        scoreBoardUI.ClearAllPreviews(_currentPlayerIndex);
-        scoreBoardUI.RefreshTotalScores(_players);
+        bool[] recorded = scoreBoardUI.GetRecordedFlags(_currentPlayerIndex);
+        if (categoryIndex < 0 || categoryIndex >= recorded.Length || recorded[categoryIndex]) return;
 
-        AudioManager.Play("score_register");
-        FindObjectOfType<NetworkDiceRPC>()?.SendCategorySelected(categoryIndex, _currentPlayerIndex, score);
+        if (GameManager.Instance != null && GameManager.Instance.IsOnline)
+        {
+            if (PhotonNetwork.IsMasterClient)
+            {
+                ConfirmScoreAsMaster(categoryIndex, playerIndex, _turnSerial);
+            }
+            else
+            {
+                if (_waitingForScoreConfirmation) return;
 
-        EndTurn();
+                _waitingForScoreConfirmation = true;
+                timerUI?.StopTimer();
+                SetCupActive(false);
+                registerBtn?.SetInteractable(false);
+                diceCtrl?.SetDiceInteractable(false);
+                scoreBoardUI?.SetScoringMode(_currentPlayerIndex, false);
+                FindObjectOfType<NetworkDiceRPC>()?.SendScoreRequest(categoryIndex, playerIndex, _turnSerial);
+            }
+
+            return;
+        }
+
+        ConfirmScoreLocally(categoryIndex, playerIndex);
+        ResolveNextTurnState(out int nextPlayerIndex, out int nextRound, out int nextTurnSerial, out bool gameOver);
+        AdvanceAfterConfirmedScore(nextPlayerIndex, nextRound, nextTurnSerial, gameOver);
     }
 
-    // ─── 타임아웃 ────────────────────────────────────────────────────
     void OnTimeUp()
     {
         if (!IsMyTurn()) return;
 
         bool rollsLeft = diceCtrl != null && diceCtrl.RollCount < (settings?.maxRollCount ?? 3);
 
-        Debug.Log($"[TurnManager] OnTimeUp — state={CurrentState} rollCount={diceCtrl?.RollCount} rollsLeft={rollsLeft} CanRoll={diceCtrl?.CanRoll}");
+        Debug.Log($"[TurnManager] OnTimeUp state={CurrentState} rollCount={diceCtrl?.RollCount} rollsLeft={rollsLeft} canRoll={diceCtrl?.CanRoll}");
 
-        // 굴림 대기 중 or 선택 대기 중 + 굴림 횟수 남음 → 자동 굴림
         if ((CurrentState == State.WaitingToRoll || CurrentState == State.WaitingForChoice) && rollsLeft)
         {
             if (diceCtrl != null && diceCtrl.CanRoll)
@@ -352,51 +373,75 @@ public class TurnManager : MonoBehaviour
             }
             else
             {
-                // 굴리기가 불가능한 상태 (IsRolling stuck 등) → 점수 등록으로 강제 진행
-                Debug.LogWarning("[TurnManager] OnTimeUp: CanRoll=false, 자동 점수 등록으로 전환");
+                Debug.LogWarning("[TurnManager] Auto-scoring because roll could not proceed.");
                 AutoScore();
             }
             return;
         }
 
-        // 굴림 소진 or MustRegister → 자동 점수 등록
         AutoScore();
     }
 
     void AutoScore()
     {
-        Debug.Log($"[TurnManager] AutoScore — state={CurrentState} player={_currentPlayerIndex}");
-        if (scoreBoardUI == null) { Debug.LogError("[TurnManager] AutoScore: scoreBoardUI null!"); return; }
-        bool[] recorded = scoreBoardUI.GetRecordedFlags(_currentPlayerIndex);
-        int    bestCat  = ScoreCalculator.BestCategory(diceCtrl.CurrentValues, recorded);
-        Debug.Log($"[TurnManager] AutoScore → bestCat={bestCat} values=[{string.Join(",", diceCtrl.CurrentValues)}]");
-        if (bestCat >= 0)
-            OnCategorySelected(bestCat, _currentPlayerIndex);
-        else
-            EndTurn();
-    }
+        Debug.Log($"[TurnManager] AutoScore state={CurrentState} player={_currentPlayerIndex}");
 
-    // ─── 턴 종료 ─────────────────────────────────────────────────────
-    void EndTurn()
-    {
-        ChangeState(State.TurnEnd);
-
-        _currentPlayerIndex++;
-        if (_currentPlayerIndex >= _players.Count)
+        if (scoreBoardUI == null)
         {
-            _currentPlayerIndex = 0;
-            _currentRound++;
-            GameManager.Instance?.AdvanceRound();
-            scoreBoardUI.UpdateRound(_currentRound, settings.totalRounds);
+            Debug.LogError("[TurnManager] AutoScore: scoreBoardUI missing.");
+            return;
         }
 
-        bool allFilled = true;
-        foreach (var p in _players)
-            if (!p.IsAllFilled) { allFilled = false; break; }
+        bool[] recorded = scoreBoardUI.GetRecordedFlags(_currentPlayerIndex);
+        int bestCat = ScoreCalculator.BestCategory(diceCtrl.CurrentValues, recorded);
+        Debug.Log($"[TurnManager] AutoScore bestCat={bestCat} values=[{string.Join(",", diceCtrl.CurrentValues)}]");
 
-        if (allFilled)
+        if (bestCat >= 0)
+            OnCategorySelected(bestCat, _currentPlayerIndex);
+    }
+
+    void ResolveNextTurnState(out int nextPlayerIndex, out int nextRound, out int nextTurnSerial, out bool gameOver)
+    {
+        nextPlayerIndex = _currentPlayerIndex + 1;
+        nextRound = _currentRound;
+
+        if (nextPlayerIndex >= _players.Count)
         {
-            ChangeState(State.GameOver);
+            nextPlayerIndex = 0;
+            nextRound++;
+        }
+
+        gameOver = true;
+        foreach (var p in _players)
+        {
+            if (!p.IsAllFilled)
+            {
+                gameOver = false;
+                break;
+            }
+        }
+
+        nextTurnSerial = _turnSerial + 1;
+    }
+
+    void AdvanceAfterConfirmedScore(int nextPlayerIndex, int nextRound, int nextTurnSerial, bool gameOver)
+    {
+        ChangeState(gameOver ? State.GameOver : State.TurnEnd);
+        _waitingForScoreConfirmation = false;
+        _currentPlayerIndex = nextPlayerIndex;
+        _currentRound = nextRound;
+        _turnSerial = nextTurnSerial;
+
+        if (GameManager.Instance != null)
+        {
+            while (GameManager.Instance.CurrentRound < _currentRound)
+                GameManager.Instance.AdvanceRound();
+        }
+
+        scoreBoardUI?.UpdateRound(_currentRound, settings.totalRounds);
+
+        if (gameOver)
+        {
             StartCoroutine(GoToResultDelayed());
             return;
         }
@@ -407,28 +452,80 @@ public class TurnManager : MonoBehaviour
     IEnumerator GoToResultDelayed()
     {
         yield return new WaitForSeconds(1.5f);
-        GameManager.Instance.GoToResult();
+        GameManager.Instance?.GoToResult();
     }
 
-    // ─── 원격 점수 수신 (NetworkDiceRPC → 호출) ──────────────────────
-    public void ReceiveRemoteCategorySelected(int categoryIndex, int playerIndex, int score)
+    public void ReceiveRemoteScoreRequest(int categoryIndex, int playerIndex, int turnSerial)
     {
-        Debug.Log($"[TurnManager] ReceiveRemote — cat={categoryIndex} player={playerIndex} score={score}");
+        if (GameManager.Instance == null || !GameManager.Instance.IsOnline) return;
+        if (!PhotonNetwork.IsMasterClient) return;
+        if (turnSerial != _turnSerial) return;
+        if (playerIndex != _currentPlayerIndex) return;
+        if (CurrentState != State.WaitingForChoice &&
+            CurrentState != State.Registering &&
+            CurrentState != State.MustRegister) return;
+
+        ConfirmScoreAsMaster(categoryIndex, playerIndex, turnSerial);
+    }
+
+    public void ReceiveRemoteScoreConfirmed(int categoryIndex, int playerIndex, int score,
+        int turnSerial, int nextPlayerIndex, int nextRound, int nextTurnSerial, bool gameOver)
+    {
+        Debug.Log($"[TurnManager] ReceiveRemoteScoreConfirmed cat={categoryIndex} player={playerIndex} score={score} turn={turnSerial}->{nextTurnSerial}");
+
         if (playerIndex < 0 || playerIndex >= _players.Count) return;
+        if (turnSerial != _turnSerial) return;
+
+        ApplyConfirmedScore(categoryIndex, playerIndex, score);
+        AdvanceAfterConfirmedScore(nextPlayerIndex, nextRound, nextTurnSerial, gameOver);
+    }
+
+    void ConfirmScoreAsMaster(int categoryIndex, int playerIndex, int turnSerial)
+    {
+        if (turnSerial != _turnSerial) return;
+
+        int score = ConfirmScoreLocally(categoryIndex, playerIndex);
+        ResolveNextTurnState(out int nextPlayerIndex, out int nextRound, out int nextTurnSerial, out bool gameOver);
+
+        FindObjectOfType<NetworkDiceRPC>()?.SendScoreConfirmed(
+            categoryIndex,
+            playerIndex,
+            score,
+            turnSerial,
+            nextPlayerIndex,
+            nextRound,
+            nextTurnSerial,
+            gameOver);
+
+        AdvanceAfterConfirmedScore(nextPlayerIndex, nextRound, nextTurnSerial, gameOver);
+    }
+
+    int ConfirmScoreLocally(int categoryIndex, int playerIndex)
+    {
+        int score = ScoreCalculator.Calculate(categoryIndex, diceCtrl.CurrentValues);
+        ApplyConfirmedScore(categoryIndex, playerIndex, score);
+        return score;
+    }
+
+    void ApplyConfirmedScore(int categoryIndex, int playerIndex, int score)
+    {
+        if (categoryIndex < 0 || categoryIndex >= _players[playerIndex].scores.Length) return;
 
         _players[playerIndex].scores[categoryIndex] = score;
         scoreBoardUI?.ConfirmScore(categoryIndex, playerIndex, score);
         scoreBoardUI?.ClearAllPreviews(playerIndex);
         scoreBoardUI?.RefreshTotalScores(_players);
         AudioManager.Play("score_register");
-        EndTurn();
     }
 
-    // ─── AI 턴 ───────────────────────────────────────────────────────
     IEnumerator AITurnCoroutine()
     {
         var ai = GetComponent<AIPlayer>();
-        if (ai == null) { BeginTurn(); yield break; }
+        if (ai == null)
+        {
+            BeginTurn();
+            yield break;
+        }
 
         ChangeState(State.WaitingToRoll);
         yield return new WaitForSeconds(settings.aiThinkDelay);
@@ -439,10 +536,12 @@ public class TurnManager : MonoBehaviour
             diceCtrl.Roll();
             yield return new WaitUntil(() => !diceCtrl.IsRolling);
 
-            bool shouldContinue = ai.ShouldReroll(_players[_currentPlayerIndex],
-                                                   diceCtrl.CurrentValues,
-                                                   diceCtrl.RollCount,
-                                                   settings.maxRollCount);
+            bool shouldContinue = ai.ShouldReroll(
+                _players[_currentPlayerIndex],
+                diceCtrl.CurrentValues,
+                diceCtrl.RollCount,
+                settings.maxRollCount);
+
             if (!shouldContinue) break;
 
             bool[] keepFlags = ai.DecideKeep(_players[_currentPlayerIndex], diceCtrl.CurrentValues);
@@ -452,8 +551,7 @@ public class TurnManager : MonoBehaviour
 
         yield return new WaitForSeconds(settings.aiScoreDelay);
         bool[] recorded = scoreBoardUI.GetRecordedFlags(_currentPlayerIndex);
-        int    bestCat  = ai.ChooseCategory(_players[_currentPlayerIndex],
-                                            diceCtrl.CurrentValues, recorded);
+        int bestCat = ai.ChooseCategory(_players[_currentPlayerIndex], diceCtrl.CurrentValues, recorded);
         ChangeState(State.Registering);
         OnCategorySelected(bestCat, _currentPlayerIndex);
     }
