@@ -1,0 +1,10 @@
+# 전부 무시
+*
+
+# Assets/Scripts 폴더만 허용
+!Assets/
+!Assets/Scripts/
+!Assets/Scripts/**
+
+# .gitignore 자체는 포함
+!.gitignore
