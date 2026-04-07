@@ -31,6 +31,7 @@ public class TurnManager : MonoBehaviour
     [SerializeField] private GameSettings        settings;
 
     private List<PlayerData> _players;
+    private NetworkDiceRPC _networkDiceRpc;
     private int _currentPlayerIndex;
     private int _currentRound;
     private int _turnSerial = 1;
@@ -38,6 +39,7 @@ public class TurnManager : MonoBehaviour
 
     public PlayerData CurrentPlayer => _players[_currentPlayerIndex];
     public int CurrentTurnSerial => _turnSerial;
+    private int MaxRollCount => settings?.maxRollCount ?? 3;
 
     void Awake()
     {
@@ -56,6 +58,7 @@ public class TurnManager : MonoBehaviour
         if (scoreBoardUI != null) scoreBoardUI.OnCategorySelected -= OnCategorySelected;
         if (registerBtn != null) registerBtn.OnRegisterClicked -= OnRegisterClicked;
         if (timerUI != null) timerUI.OnTimeUp -= OnTimeUp;
+        if (uiCupShaker != null) uiCupShaker.OnShakeStarted -= OnCupShakeStarted;
     }
 
     void Start()
@@ -70,57 +73,10 @@ public class TurnManager : MonoBehaviour
     {
         yield return null;
 
-        if (diceCtrl == null) diceCtrl = FindObjectOfType<DiceController>();
-        if (diceCup == null) diceCup = FindObjectOfType<DiceCup>();
-        if (uiCupShaker == null) uiCupShaker = FindObjectOfType<UICupShaker>();
-        if (scoreBoardUI == null) scoreBoardUI = FindObjectOfType<ScoreBoardUI>(true);
-        if (timerUI == null) timerUI = FindObjectOfType<TimerUI>();
-        if (registerBtn == null) registerBtn = FindObjectOfType<RegisterButton>();
-        if (turnToken == null) turnToken = FindObjectOfType<TurnToken>();
-        if (turnBanner == null) turnBanner = FindObjectOfType<TurnBannerUI>(true);
-        if (celebrationBanner == null) celebrationBanner = FindObjectOfType<CelebrationBannerUI>(true);
-
+        EnsureSceneReferences();
         SubscribeDiceEvents();
-
-        if (scoreBoardUI != null) scoreBoardUI.OnCategorySelected += OnCategorySelected;
-        if (registerBtn != null) registerBtn.OnRegisterClicked += OnRegisterClicked;
-        if (timerUI != null) timerUI.OnTimeUp += OnTimeUp;
-
-        if (GameManager.Instance != null)
-        {
-            _players = GameManager.Instance.Players;
-            settings = GameManager.Instance.Settings;
-            if (_players != null)
-            {
-                foreach (var p in _players)
-                    if (p.scores == null) p.Init(8);
-            }
-        }
-
-        if (_players == null || _players.Count == 0)
-        {
-            var p0 = new PlayerData { name = "Player1" };
-            var p1 = new PlayerData { name = "Player2" };
-
-            if (PhotonNetwork.InRoom)
-            {
-                foreach (var pp in PhotonNetwork.PlayerList)
-                {
-                    if (pp.IsMasterClient) p0.name = pp.NickName;
-                    else p1.name = pp.NickName;
-                }
-            }
-
-            p0.Init(8);
-            p1.Init(8);
-            _players = new List<PlayerData> { p0, p1 };
-        }
-
-        if (settings == null)
-        {
-            Debug.LogWarning("[TurnManager] GameSettings missing, using runtime default.");
-            settings = ScriptableObject.CreateInstance<GameSettings>();
-        }
+        WireUiEvents();
+        SetupPlayersAndSettings();
 
         if (scoreBoardUI == null)
         {
@@ -133,6 +89,70 @@ public class TurnManager : MonoBehaviour
         AudioManager.Instance?.PlayGameBGM();
 
         BeginTurn();
+    }
+
+    void EnsureSceneReferences()
+    {
+        if (diceCtrl == null) diceCtrl = FindObjectOfType<DiceController>();
+        if (diceCup == null) diceCup = FindObjectOfType<DiceCup>();
+        if (uiCupShaker == null) uiCupShaker = FindObjectOfType<UICupShaker>();
+        if (scoreBoardUI == null) scoreBoardUI = FindObjectOfType<ScoreBoardUI>(true);
+        if (timerUI == null) timerUI = FindObjectOfType<TimerUI>();
+        if (registerBtn == null) registerBtn = FindObjectOfType<RegisterButton>();
+        if (turnToken == null) turnToken = FindObjectOfType<TurnToken>();
+        if (turnBanner == null) turnBanner = FindObjectOfType<TurnBannerUI>(true);
+        if (celebrationBanner == null) celebrationBanner = FindObjectOfType<CelebrationBannerUI>(true);
+        if (_networkDiceRpc == null) _networkDiceRpc = FindObjectOfType<NetworkDiceRPC>();
+    }
+
+    void WireUiEvents()
+    {
+        if (scoreBoardUI != null) scoreBoardUI.OnCategorySelected += OnCategorySelected;
+        if (registerBtn != null) registerBtn.OnRegisterClicked += OnRegisterClicked;
+        if (timerUI != null) timerUI.OnTimeUp += OnTimeUp;
+        if (uiCupShaker != null) uiCupShaker.OnShakeStarted += OnCupShakeStarted;
+    }
+
+    void SetupPlayersAndSettings()
+    {
+        if (GameManager.Instance != null)
+        {
+            _players = GameManager.Instance.Players;
+            settings = GameManager.Instance.Settings;
+            if (_players != null)
+            {
+                foreach (var p in _players)
+                    if (p.scores == null) p.Init(8);
+            }
+        }
+
+        if (_players == null || _players.Count == 0)
+            _players = CreateFallbackPlayers();
+
+        if (settings == null)
+        {
+            Debug.LogWarning("[TurnManager] GameSettings missing, using runtime default.");
+            settings = ScriptableObject.CreateInstance<GameSettings>();
+        }
+    }
+
+    List<PlayerData> CreateFallbackPlayers()
+    {
+        var firstPlayer = new PlayerData { name = "Player1" };
+        var secondPlayer = new PlayerData { name = "Player2" };
+
+        if (PhotonNetwork.InRoom)
+        {
+            foreach (var photonPlayer in PhotonNetwork.PlayerList)
+            {
+                if (photonPlayer.IsMasterClient) firstPlayer.name = photonPlayer.NickName;
+                else secondPlayer.name = photonPlayer.NickName;
+            }
+        }
+
+        firstPlayer.Init(8);
+        secondPlayer.Init(8);
+        return new List<PlayerData> { firstPlayer, secondPlayer };
     }
 
     void SubscribeDiceEvents()
@@ -155,7 +175,8 @@ public class TurnManager : MonoBehaviour
         switch (next)
         {
             case State.TurnStart:
-                timerUI?.StopTimer();
+                timerUI?.StartTimer(settings.turnTimeLimit);
+                timerUI?.PauseTimer(true);
                 SetCupActive(false);
                 registerBtn?.SetInteractable(false);
                 scoreBoardUI?.SetScoringMode(_currentPlayerIndex, false);
@@ -214,8 +235,7 @@ public class TurnManager : MonoBehaviour
         diceCup?.SetInteractable(on);
         uiCupShaker?.SetInteractable(on);
         if (on) uiCupShaker?.ShowCup();
-        diceCup?.UpdateRollCountBadge();
-        uiCupShaker?.UpdateRollCountBadge();
+        RefreshRollCountBadges();
     }
 
     bool IsMyTurn()
@@ -236,6 +256,7 @@ public class TurnManager : MonoBehaviour
         _waitingForScoreConfirmation = false;
         ChangeState(State.TurnStart);
         diceCtrl?.ResetForNewTurn();
+        RefreshRollCountBadges();
 
         scoreBoardUI?.SetActivePlayer(_currentPlayerIndex);
         scoreBoardUI?.ClearAllPreviews(_currentPlayerIndex);
@@ -265,25 +286,36 @@ public class TurnManager : MonoBehaviour
             ChangeState(State.Rolling);
     }
 
+    void OnCupShakeStarted()
+    {
+        if (CurrentState != State.WaitingForChoice) return;
+        if (!HasRollsLeft()) return;
+
+        timerUI?.StartTimer(settings.turnTimeLimit);
+        timerUI?.PauseTimer(true);
+        scoreBoardUI?.ShowZeroPreviews(_currentPlayerIndex);
+        scoreBoardUI?.SetScoringMode(_currentPlayerIndex, false);
+        registerBtn?.SetInteractable(false);
+        diceCtrl?.SetDiceInteractable(false);
+    }
+
     void OnRollComplete()
     {
-        bool rollsLeft = diceCtrl.RollCount < (settings?.maxRollCount ?? 3);
+        bool rollsLeft = HasRollsLeft();
 
         if (rollsLeft)
         {
             ChangeState(State.WaitingForChoice);
             bool bannerShown = ShowScorePreviews(IsMyTurn() ? (() => SetCupActive(true)) : null);
             if (IsMyTurn() && !bannerShown) SetCupActive(true);
-            diceCup?.UpdateRollCountBadge();
-            uiCupShaker?.UpdateRollCountBadge();
+            RefreshRollCountBadges();
         }
         else
         {
             ChangeState(State.MustRegister);
             bool bannerShown = ShowScorePreviews(IsMyTurn() ? (() => scoreBoardUI?.SetScoringMode(_currentPlayerIndex, true)) : null);
             if (IsMyTurn() && !bannerShown) scoreBoardUI?.SetScoringMode(_currentPlayerIndex, true);
-            diceCup?.UpdateRollCountBadge();
-            uiCupShaker?.UpdateRollCountBadge();
+            RefreshRollCountBadges();
         }
     }
 
@@ -319,9 +351,7 @@ public class TurnManager : MonoBehaviour
 
     void OnCategorySelected(int categoryIndex, int playerIndex)
     {
-        if (CurrentState != State.WaitingForChoice &&
-            CurrentState != State.Registering &&
-            CurrentState != State.MustRegister) return;
+        if (!IsScoreSelectionState()) return;
 
         if (playerIndex != _currentPlayerIndex) return;
         if (!IsMyTurn()) return;
@@ -339,13 +369,8 @@ public class TurnManager : MonoBehaviour
             {
                 if (_waitingForScoreConfirmation) return;
 
-                _waitingForScoreConfirmation = true;
-                timerUI?.StopTimer();
-                SetCupActive(false);
-                registerBtn?.SetInteractable(false);
-                diceCtrl?.SetDiceInteractable(false);
-                scoreBoardUI?.SetScoringMode(_currentPlayerIndex, false);
-                FindObjectOfType<NetworkDiceRPC>()?.SendScoreRequest(categoryIndex, playerIndex, _turnSerial);
+                EnterWaitingForScoreConfirmation();
+                _networkDiceRpc?.SendScoreRequest(categoryIndex, playerIndex, _turnSerial);
             }
 
             return;
@@ -360,7 +385,7 @@ public class TurnManager : MonoBehaviour
     {
         if (!IsMyTurn()) return;
 
-        bool rollsLeft = diceCtrl != null && diceCtrl.RollCount < (settings?.maxRollCount ?? 3);
+        bool rollsLeft = HasRollsLeft();
 
         Debug.Log($"[TurnManager] OnTimeUp state={CurrentState} rollCount={diceCtrl?.RollCount} rollsLeft={rollsLeft} canRoll={diceCtrl?.CanRoll}");
 
@@ -461,9 +486,7 @@ public class TurnManager : MonoBehaviour
         if (!PhotonNetwork.IsMasterClient) return;
         if (turnSerial != _turnSerial) return;
         if (playerIndex != _currentPlayerIndex) return;
-        if (CurrentState != State.WaitingForChoice &&
-            CurrentState != State.Registering &&
-            CurrentState != State.MustRegister) return;
+        if (!IsScoreSelectionState()) return;
 
         ConfirmScoreAsMaster(categoryIndex, playerIndex, turnSerial);
     }
@@ -487,7 +510,7 @@ public class TurnManager : MonoBehaviour
         int score = ConfirmScoreLocally(categoryIndex, playerIndex);
         ResolveNextTurnState(out int nextPlayerIndex, out int nextRound, out int nextTurnSerial, out bool gameOver);
 
-        FindObjectOfType<NetworkDiceRPC>()?.SendScoreConfirmed(
+        _networkDiceRpc?.SendScoreConfirmed(
             categoryIndex,
             playerIndex,
             score,
@@ -516,6 +539,34 @@ public class TurnManager : MonoBehaviour
         scoreBoardUI?.ClearAllPreviews(playerIndex);
         scoreBoardUI?.RefreshTotalScores(_players);
         AudioManager.Play("score_register");
+    }
+
+    bool HasRollsLeft()
+    {
+        return diceCtrl != null && diceCtrl.RollCount < MaxRollCount;
+    }
+
+    bool IsScoreSelectionState()
+    {
+        return CurrentState == State.WaitingForChoice ||
+               CurrentState == State.Registering ||
+               CurrentState == State.MustRegister;
+    }
+
+    void EnterWaitingForScoreConfirmation()
+    {
+        _waitingForScoreConfirmation = true;
+        timerUI?.StopTimer();
+        SetCupActive(false);
+        registerBtn?.SetInteractable(false);
+        diceCtrl?.SetDiceInteractable(false);
+        scoreBoardUI?.SetScoringMode(_currentPlayerIndex, false);
+    }
+
+    void RefreshRollCountBadges()
+    {
+        diceCup?.UpdateRollCountBadge();
+        uiCupShaker?.UpdateRollCountBadge();
     }
 
     IEnumerator AITurnCoroutine()

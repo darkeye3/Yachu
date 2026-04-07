@@ -44,52 +44,33 @@ public class DiceController : MonoBehaviour
     public System.Action<Dice> OnDiceKeepToggled;
 
     private TurnManager _turnManager;
+    private UICupShaker _uiCupShaker;
+    private NetworkDiceRPC _networkDiceRpc;
 
     void Awake()
     {
-        for (int i = 0; i < Dice.Length; i++) Dice[i] = new DiceInfo();
+        InitializeDiceInfos();
     }
 
     void Start()
     {
-        if (dices == null || dices.Length == 0)
-            dices = FindObjectsOfType<Dice>();
-
-        if (keepSlots == null || keepSlots.Length == 0)
-            keepSlots = FindObjectsOfType<DiceSlot>();
-
-        _turnManager = FindObjectOfType<TurnManager>();
+        EnsureReferences();
 
         Debug.Log($"[DiceController] Start dices={dices?.Length}, keepSlots={keepSlots?.Length}, diceBox3D={diceBox3D != null}");
 
         if (!Has2D && !Has3D)
             Debug.LogError("[DiceController] No dice presentation connected.");
 
-        if (Has3D)
-        {
-            diceBox3D.OnBoardDiceClicked += OnDice3DClicked;
-            diceBox3D.OnDiceLineupComplete += () =>
-            {
-                IsRolling = false;
-                if (Has2D)
-                {
-                    foreach (var d in dices) d.SetInteractable(true);
-                }
-                OnRollComplete?.Invoke();
-            };
-        }
+        Setup3DPresentation();
+        Setup2DPresentation();
+    }
 
-        if (Has2D)
-        {
-            for (int i = 0; i < dices.Length; i++)
-            {
-                var origin = diceOrigins != null && i < diceOrigins.Length ? diceOrigins[i] : Vector2.zero;
-                dices[i].Init(i == 4, origin);
-                int captured = i;
-                dices[i].OnDiceClicked += _ => HandleDiceClick(captured);
-                dices[i].SetInteractable(false);
-            }
-        }
+    void OnDestroy()
+    {
+        if (diceBox3D == null) return;
+
+        diceBox3D.OnBoardDiceClicked -= OnDice3DClicked;
+        diceBox3D.OnDiceLineupComplete -= On3DLineupComplete;
     }
 
     public void Roll()
@@ -111,42 +92,13 @@ public class DiceController : MonoBehaviour
 
         AudioManager.Play("dice_roll");
 
-        if (diceBox3D == null) diceBox3D = FindObjectOfType<DiceBox3D>();
-        if (_turnManager == null) _turnManager = FindObjectOfType<TurnManager>();
-        if (roller == null && diceArea != null) roller = diceArea.GetComponent<DicePhysicsRoller>();
-        if (roller == null) roller = FindObjectOfType<DicePhysicsRoller>();
+        EnsureReferences();
 
         float rollDuration = 0f;
 
         if (Has3D)
         {
-            var keepFlags = new bool[Dice.Length];
-            for (int i = 0; i < Dice.Length; i++) keepFlags[i] = Dice[i].IsKept;
-
-            bool useAnimated = true;
-            if (useAnimated)
-            {
-                var finalValues = new int[Dice.Length];
-                for (int i = 0; i < Dice.Length; i++)
-                    finalValues[i] = Dice[i].IsKept ? Dice[i].Value : Random.Range(1, 7);
-
-                float gaugeValue = FindObjectOfType<UICupShaker>()?.LastGaugeValue ?? 1f;
-                int animSeed = Random.Range(0, int.MaxValue);
-                int turnSerial = _turnManager != null ? _turnManager.CurrentTurnSerial : 0;
-
-                if (GameManager.Instance != null && GameManager.Instance.IsOnline)
-                {
-                    FindObjectOfType<NetworkDiceRPC>()
-                        ?.SendDiceRoll(finalValues, keepFlags, gaugeValue, animSeed, turnSerial, RollCount);
-                }
-
-                diceBox3D.ThrowDiceAnimated(finalValues, keepFlags, gaugeValue, animSeed);
-            }
-            else
-            {
-                diceBox3D.ThrowDiceOntoBoard(keepFlags);
-            }
-
+            Start3DRollPresentation();
             yield break;
         }
         else if (roller != null)
@@ -251,6 +203,105 @@ public class DiceController : MonoBehaviour
         if (IsRolling || RollCount == 0) return;
         if (!CanInteractWithDiceLocally()) return;
         HandleDiceClick(index);
+    }
+
+    void InitializeDiceInfos()
+    {
+        for (int i = 0; i < Dice.Length; i++)
+            Dice[i] = new DiceInfo();
+    }
+
+    void EnsureReferences()
+    {
+        if (dices == null || dices.Length == 0)
+            dices = FindObjectsOfType<Dice>();
+
+        if (keepSlots == null || keepSlots.Length == 0)
+            keepSlots = FindObjectsOfType<DiceSlot>();
+
+        if (diceBox3D == null)
+            diceBox3D = FindObjectOfType<DiceBox3D>();
+
+        if (_turnManager == null)
+            _turnManager = FindObjectOfType<TurnManager>();
+
+        if (_uiCupShaker == null)
+            _uiCupShaker = FindObjectOfType<UICupShaker>();
+
+        if (_networkDiceRpc == null)
+            _networkDiceRpc = FindObjectOfType<NetworkDiceRPC>();
+
+        if (roller == null && diceArea != null)
+            roller = diceArea.GetComponent<DicePhysicsRoller>();
+
+        if (roller == null)
+            roller = FindObjectOfType<DicePhysicsRoller>();
+    }
+
+    void Setup3DPresentation()
+    {
+        if (!Has3D) return;
+
+        diceBox3D.OnBoardDiceClicked += OnDice3DClicked;
+        diceBox3D.OnDiceLineupComplete += On3DLineupComplete;
+    }
+
+    void Setup2DPresentation()
+    {
+        if (!Has2D) return;
+
+        for (int i = 0; i < dices.Length; i++)
+        {
+            var origin = diceOrigins != null && i < diceOrigins.Length ? diceOrigins[i] : Vector2.zero;
+            dices[i].Init(i == 4, origin);
+            int captured = i;
+            dices[i].OnDiceClicked += _ => HandleDiceClick(captured);
+            dices[i].SetInteractable(false);
+        }
+    }
+
+    void On3DLineupComplete()
+    {
+        IsRolling = false;
+        if (Has2D)
+        {
+            foreach (var d in dices) d.SetInteractable(true);
+        }
+        OnRollComplete?.Invoke();
+    }
+
+    void Start3DRollPresentation()
+    {
+        var keepFlags = Get3DKeepFlags();
+        var finalValues = GetAnimatedFinalValues();
+        float gaugeValue = _uiCupShaker != null ? _uiCupShaker.LastGaugeValue : 1f;
+        int animSeed = Random.Range(0, int.MaxValue);
+        int turnSerial = _turnManager != null ? _turnManager.CurrentTurnSerial : 0;
+
+        if (GameManager.Instance != null && GameManager.Instance.IsOnline)
+        {
+            _networkDiceRpc?.SendDiceRoll(finalValues, keepFlags, gaugeValue, animSeed, turnSerial, RollCount);
+        }
+
+        diceBox3D.ThrowDiceAnimated(finalValues, keepFlags, gaugeValue, animSeed);
+    }
+
+    bool[] Get3DKeepFlags()
+    {
+        var keepFlags = new bool[Dice.Length];
+        for (int i = 0; i < Dice.Length; i++)
+            keepFlags[i] = Dice[i].IsKept;
+
+        return keepFlags;
+    }
+
+    int[] GetAnimatedFinalValues()
+    {
+        var finalValues = new int[Dice.Length];
+        for (int i = 0; i < Dice.Length; i++)
+            finalValues[i] = Dice[i].IsKept ? Dice[i].Value : Random.Range(1, 7);
+
+        return finalValues;
     }
 
     public void ResetForNewTurn()

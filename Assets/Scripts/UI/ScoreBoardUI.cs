@@ -27,18 +27,7 @@ public class ScoreBoardUI : MonoBehaviour
 
     void Awake()
     {
-        if (roundText == null)
-        {
-            var t = transform.Find("RoundText");
-            if (t != null) roundText = t.GetComponent<TextMeshProUGUI>();
-        }
-
-        if (roundText == null)
-        {
-            var go = GameObject.Find("RoundText");
-            if (go != null) roundText = go.GetComponent<TextMeshProUGUI>();
-        }
-
+        ResolveRoundTextReference();
         CacheBackgroundReference();
     }
 
@@ -48,66 +37,8 @@ public class ScoreBoardUI : MonoBehaviour
         CacheBackgroundReference();
         Debug.Log($"[ScoreBoardUI] Build start playerCount={_playerCount}, categoryRowPrefab={categoryRowPrefab != null}, playerCardPrefab={playerCardPrefab != null}");
 
-        _playerCards.Clear();
-        if (playerCardPrefab != null && playerRow != null)
-        {
-            foreach (Transform t in playerRow) Destroy(t.gameObject);
-            foreach (var p in players)
-            {
-                var go = Instantiate(playerCardPrefab, playerRow);
-                var card = go.GetComponent<PlayerCard>();
-                card.Setup(p);
-                _playerCards.Add(card);
-            }
-        }
-        else if (playerRow != null)
-        {
-            foreach (Transform t in playerRow)
-            {
-                var card = t.GetComponent<PlayerCard>();
-                if (card != null) _playerCards.Add(card);
-            }
-
-            for (int i = 0; i < Mathf.Min(_playerCards.Count, players.Count); i++)
-                _playerCards[i].Setup(players[i]);
-        }
-
-        _categoryRows.Clear();
-        Transform container = categoryList != null ? categoryList : transform;
-        if (categoryRowPrefab != null)
-        {
-            foreach (Transform t in container) Destroy(t.gameObject);
-            for (int i = 0; i < 8; i++)
-            {
-                var go = Instantiate(categoryRowPrefab, container);
-                var row = go.GetComponent<CategoryRow>();
-                if (row == null)
-                {
-                    Debug.LogError("[ScoreBoardUI] CategoryRow component missing.");
-                    continue;
-                }
-
-                Sprite icon = categoryIcons != null && i < categoryIcons.Length ? categoryIcons[i] : null;
-                row.Init(i, _playerCount, icon);
-                row.OnScoreCellClicked += (catIdx, plrIdx) => OnCategorySelected?.Invoke(catIdx, plrIdx);
-                _categoryRows.Add(row);
-            }
-        }
-        else
-        {
-            int idx = 0;
-            foreach (Transform t in container)
-            {
-                var row = t.GetComponent<CategoryRow>();
-                if (row == null) continue;
-
-                Sprite icon = categoryIcons != null && idx < categoryIcons.Length ? categoryIcons[idx] : null;
-                row.Init(idx, _playerCount, icon);
-                row.OnScoreCellClicked += (catIdx, plrIdx) => OnCategorySelected?.Invoke(catIdx, plrIdx);
-                _categoryRows.Add(row);
-                idx++;
-            }
-        }
+        BuildPlayerCards(players);
+        BuildCategoryRows();
 
         Debug.Log($"[ScoreBoardUI] Build complete rows={_categoryRows.Count} cards={_playerCards.Count}");
         RefreshTotalScores(players);
@@ -134,6 +65,15 @@ public class ScoreBoardUI : MonoBehaviour
             if (_categoryRows[i].IsRecorded(playerIndex)) continue;
             int score = ScoreCalculator.Calculate(i, diceValues);
             _categoryRows[i].ShowPreview(playerIndex, score);
+        }
+    }
+
+    public void ShowZeroPreviews(int playerIndex)
+    {
+        for (int i = 0; i < _categoryRows.Count; i++)
+        {
+            if (_categoryRows[i].IsRecorded(playerIndex)) continue;
+            _categoryRows[i].ShowPreview(playerIndex, 0);
         }
     }
 
@@ -179,46 +119,147 @@ public class ScoreBoardUI : MonoBehaviour
     {
         if (_backgroundImage != null) return;
 
-        var images = GetComponentsInChildren<Image>(true);
-        foreach (var image in images)
-        {
-            if (image != null && image.name == "Background")
-            {
-                _backgroundImage = image;
-                _defaultBackgroundColor = image.color;
-                break;
-            }
-        }
+        _backgroundImage = FindBackgroundInChildren();
 
         if (_backgroundImage != null) return;
 
-        Transform current = transform;
-        while (current != null && _backgroundImage == null)
-        {
-            var background = current.Find("Background");
-            if (background != null)
-            {
-                _backgroundImage = background.GetComponent<Image>();
-                if (_backgroundImage != null)
-                {
-                    _defaultBackgroundColor = _backgroundImage.color;
-                    break;
-                }
-            }
-            current = current.parent;
-        }
+        _backgroundImage = FindBackgroundInParents();
     }
 
     void UpdateBackgroundForTurn(int activePlayerIndex)
     {
         if (_backgroundImage == null) return;
 
-        int localPlayerIndex = 0;
-        if (GameManager.Instance != null)
-            localPlayerIndex = GameManager.Instance.LocalPlayerIndex;
-
-        _backgroundImage.color = activePlayerIndex == localPlayerIndex
+        _backgroundImage.color = activePlayerIndex == GetLocalPlayerIndex()
             ? MyTurnBackgroundColor
             : _defaultBackgroundColor;
+    }
+
+    void ResolveRoundTextReference()
+    {
+        if (roundText != null) return;
+
+        var localText = transform.Find("RoundText");
+        if (localText != null)
+        {
+            roundText = localText.GetComponent<TextMeshProUGUI>();
+            if (roundText != null) return;
+        }
+
+        var globalText = GameObject.Find("RoundText");
+        if (globalText != null)
+            roundText = globalText.GetComponent<TextMeshProUGUI>();
+    }
+
+    void BuildPlayerCards(List<PlayerData> players)
+    {
+        _playerCards.Clear();
+        if (playerRow == null) return;
+
+        if (playerCardPrefab != null)
+        {
+            foreach (Transform child in playerRow) Destroy(child.gameObject);
+            foreach (var player in players)
+            {
+                var instance = Instantiate(playerCardPrefab, playerRow);
+                var card = instance.GetComponent<PlayerCard>();
+                card.Setup(player);
+                _playerCards.Add(card);
+            }
+            return;
+        }
+
+        foreach (Transform child in playerRow)
+        {
+            var card = child.GetComponent<PlayerCard>();
+            if (card != null) _playerCards.Add(card);
+        }
+
+        for (int i = 0; i < Mathf.Min(_playerCards.Count, players.Count); i++)
+            _playerCards[i].Setup(players[i]);
+    }
+
+    void BuildCategoryRows()
+    {
+        _categoryRows.Clear();
+        Transform container = categoryList != null ? categoryList : transform;
+
+        if (categoryRowPrefab != null)
+        {
+            foreach (Transform child in container) Destroy(child.gameObject);
+            for (int i = 0; i < 8; i++)
+            {
+                var instance = Instantiate(categoryRowPrefab, container);
+                RegisterCategoryRow(instance.GetComponent<CategoryRow>(), i);
+            }
+            return;
+        }
+
+        int index = 0;
+        foreach (Transform child in container)
+        {
+            var row = child.GetComponent<CategoryRow>();
+            if (row == null) continue;
+            RegisterCategoryRow(row, index++);
+        }
+    }
+
+    void RegisterCategoryRow(CategoryRow row, int categoryIndex)
+    {
+        if (row == null)
+        {
+            Debug.LogError("[ScoreBoardUI] CategoryRow component missing.");
+            return;
+        }
+
+        Sprite icon = categoryIcons != null && categoryIndex < categoryIcons.Length ? categoryIcons[categoryIndex] : null;
+        row.Init(categoryIndex, _playerCount, icon);
+        row.OnScoreCellClicked -= HandleScoreCellClicked;
+        row.OnScoreCellClicked += HandleScoreCellClicked;
+        _categoryRows.Add(row);
+    }
+
+    void HandleScoreCellClicked(int categoryIndex, int playerIndex)
+    {
+        OnCategorySelected?.Invoke(categoryIndex, playerIndex);
+    }
+
+    Image FindBackgroundInChildren()
+    {
+        var images = GetComponentsInChildren<Image>(true);
+        foreach (var image in images)
+        {
+            if (image == null || image.name != "Background") continue;
+            _defaultBackgroundColor = image.color;
+            return image;
+        }
+
+        return null;
+    }
+
+    Image FindBackgroundInParents()
+    {
+        Transform current = transform;
+        while (current != null)
+        {
+            var background = current.Find("Background");
+            if (background != null)
+            {
+                var image = background.GetComponent<Image>();
+                if (image != null)
+                {
+                    _defaultBackgroundColor = image.color;
+                    return image;
+                }
+            }
+            current = current.parent;
+        }
+
+        return null;
+    }
+
+    int GetLocalPlayerIndex()
+    {
+        return GameManager.Instance != null ? GameManager.Instance.LocalPlayerIndex : 0;
     }
 }

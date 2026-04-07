@@ -34,6 +34,7 @@ public class DiceBox3D : MonoBehaviour
     private Die3D[]    _dice    = new Die3D[5];   // 보드 위 물리 주사위
     private Die3D[]    _cupDice = new Die3D[5];   // 컵 안 시각용 주사위 (Rigidbody 없음)
     private Vector3[]  _cupDiceBaseLocalPos = new Vector3[5]; // 쉐이크 지터 기저 위치
+    private float[]    _dieEdgeLengths = new float[5];
     private Transform  _cupRoot;
     private Vector3    _cupBasePosition;
     private Collider[] _cupColliders;
@@ -89,10 +90,7 @@ public class DiceBox3D : MonoBehaviour
         float visW = boardCreator != null ? boardCreator.VisibleWidth  : 10f;
         float visH = boardCreator != null ? boardCreator.VisibleHeight : 8f;
 
-        var camGO = GameObject.Find("BoardCamera");
-        if (camGO != null) _boardCamera = camGO.GetComponent<Camera>();
-        _diceController = FindObjectOfType<DiceController>();
-        _turnManager = FindObjectOfType<TurnManager>();
+        EnsureReferences();
 
 
         // 정렬 위치: 보드 가시 너비의 80% 안에 5개 균등 배치
@@ -438,6 +436,11 @@ public class DiceBox3D : MonoBehaviour
     // ── 가로 일자 정렬 ────────────────────────────────────────────────
     IEnumerator LineupDice(bool[] keepFlags)
     {
+        return LineupDice(keepFlags, null);
+    }
+
+    IEnumerator LineupDice(bool[] keepFlags, int[] authoritativeValues)
+    {
         // 활성화된 비보관 주사위 수집 + 눈 값 기준 오름차순 정렬
         var collected = new System.Collections.Generic.List<(int idx, Die3D die, int face)>();
         for (int i = 0; i < _dice.Length; i++)
@@ -448,7 +451,8 @@ public class DiceBox3D : MonoBehaviour
             var rb = _dice[i].GetComponent<Rigidbody>();
             if (rb != null) { rb.isKinematic = true; rb.velocity = rb.angularVelocity = Vector3.zero; }
 
-            int face = _dice[i].GetTopFace();
+            bool hasAuthoritativeFace = authoritativeValues != null && i < authoritativeValues.Length;
+            int face = hasAuthoritativeFace ? authoritativeValues[i] : _dice[i].GetTopFace();
             _dice[i].Value = face;
             if (_diceController != null) _diceController.Dice[i].Value = face;  // 공유 상태 저장
 
@@ -535,7 +539,7 @@ public class DiceBox3D : MonoBehaviour
 
     bool CanLocalInteractWithOverlay()
     {
-        if (_turnManager == null) _turnManager = FindObjectOfType<TurnManager>();
+        EnsureReferences();
         return _turnManager == null || _turnManager.CanLocalManipulateDice();
     }
 
@@ -581,6 +585,7 @@ public class DiceBox3D : MonoBehaviour
 
     public void ResetAllDice()
     {
+        EnsureReferences();
         if (_cupRoot == null)
         {
             Debug.LogError("[DiceBox3D] _cupRoot null — diceShakerPrefab을 Inspector에 연결하세요.");
@@ -711,6 +716,30 @@ public class DiceBox3D : MonoBehaviour
     private TurnManager     _turnManager;
     private bool            _diceClickable = false;
 
+    void EnsureReferences()
+    {
+        if (_diceController == null) _diceController = FindObjectOfType<DiceController>();
+        if (_turnManager == null) _turnManager = FindObjectOfType<TurnManager>();
+        if (_boardCamera == null)
+        {
+            var cameraObject = GameObject.Find("BoardCamera");
+            if (cameraObject != null) _boardCamera = cameraObject.GetComponent<Camera>();
+        }
+    }
+
+    void GetBoardHalfSize(out float halfW, out float halfH)
+    {
+        halfW = 3f;
+        halfH = 2f;
+
+        var boardCreator = FindObjectOfType<DiceBoardCreator>();
+        if (boardCreator != null)
+        {
+            halfW = boardCreator.VisibleWidth * 0.5f;
+            halfH = boardCreator.VisibleHeight * 0.5f;
+        }
+    }
+
     [Header("오버레이 좌표 기준 RawImage")]
     [SerializeField] private UnityEngine.UI.RawImage boardRawImage;
 
@@ -723,16 +752,17 @@ public class DiceBox3D : MonoBehaviour
     // 보드 위 랜덤 위치에서 생성 후 물리로 낙하
     public void ThrowDiceOntoBoard(bool[] keepFlags = null)
     {
+        EnsureReferences();
         if (keepFlags == null)
         {
-            var dc = FindObjectOfType<DiceController>();
-            keepFlags = dc != null ? dc.GetKeptFlags() : new bool[5];
+            keepFlags = _diceController != null ? _diceController.GetKeptFlags() : new bool[5];
         }
         StartCoroutine(ThrowDiceCo(keepFlags));
     }
 
     IEnumerator ThrowDiceCo(bool[] keepFlags)
     {
+        EnsureReferences();
         // 킵되지 않은 오버레이 제거 (StartShake에서 못 지웠을 경우 대비)
         ClearNonKeptOverlays();
 
@@ -760,13 +790,7 @@ public class DiceBox3D : MonoBehaviour
 
 
         // 보드 크기 가져오기
-        float halfW = 3f, halfH = 2f;
-        var boardCreator = FindObjectOfType<DiceBoardCreator>();
-        if (boardCreator != null)
-        {
-            halfW = boardCreator.VisibleWidth  * 0.5f;
-            halfH = boardCreator.VisibleHeight * 0.5f;
-        }
+        GetBoardHalfSize(out float halfW, out float halfH);
 
         for (int i = 0; i < _dice.Length; i++)
         {
@@ -1176,14 +1200,13 @@ public class DiceBox3D : MonoBehaviour
 
     IEnumerator ThrowDiceAnimatedCo(int[] finalValues, bool[] keepFlags, float gaugeValue, int seed)
     {
+        EnsureReferences();
         ClearNonKeptOverlays();
         for (int i = 0; i < _cupDice.Length; i++)
             if (_cupDice[i] != null) _cupDice[i].gameObject.SetActive(false);
 
         // ── 보드 경계 계산 ────────────────────────────────────────────
-        float halfW = 3f, halfH = 2f;
-        var boardCreator = FindObjectOfType<DiceBoardCreator>();
-        if (boardCreator != null) { halfW = boardCreator.VisibleWidth * 0.5f; halfH = boardCreator.VisibleHeight * 0.5f; }
+        GetBoardHalfSize(out float halfW, out float halfH);
 
         float boardY  = _lineupPos[0].y;
         float wallInset = 0.5f;  // 벽 waypoint를 안쪽으로 당김 (정확히 벽에 닿지 않게)
@@ -1216,7 +1239,7 @@ public class DiceBox3D : MonoBehaviour
         float baseArc = Mathf.Lerp(0.15f, 0.35f, gaugeValue);
 
         // 착지 위치: 마지막 벽 바운스에서 이 거리 이내로 제한
-        const float maxLandDist = 4.5f;
+        const float maxLandDist = 3.6f;
         float       pad         = 0.5f;
         float       minDist     = 1.3f;
 
@@ -1227,7 +1250,10 @@ public class DiceBox3D : MonoBehaviour
 
         // 경로·파라미터를 struct 배열로 미리 계산 → 코루틴에 값으로 전달
         var perDie = new (System.Collections.Generic.List<Vector3> path,
+                          Quaternion startRot,
                           Quaternion landRot,
+                          Vector3 settlePos,
+                          int plannerSegments,
                           float segDur,
                           float initArc,
                           float arcDecay,
@@ -1267,9 +1293,9 @@ public class DiceBox3D : MonoBehaviour
                 Vector3 hitPt = curPt + curDir * tMin;
                 // 벽 충돌점에 소폭 랜덤 편차 (코너 고착 방지 + 자연스러움)
                 hitPt += new Vector3(
-                    Random.Range(-0.25f, 0.25f) * Mathf.Abs(hitNormal.z),
+                    Random.Range(-0.12f, 0.12f) * Mathf.Abs(hitNormal.z),
                     0f,
-                    Random.Range(-0.25f, 0.25f) * Mathf.Abs(hitNormal.x)
+                    Random.Range(-0.12f, 0.12f) * Mathf.Abs(hitNormal.x)
                 );
                 hitPt.x = Mathf.Clamp(hitPt.x, leftX, rightX);
                 hitPt.z = Mathf.Clamp(hitPt.z, bottomZ, topZ);
@@ -1289,7 +1315,7 @@ public class DiceBox3D : MonoBehaviour
             for (int attempt = 0; attempt < 50; attempt++)
             {
                 float angle = Random.value * Mathf.PI * 2f;
-                float dist  = Random.Range(2.0f, maxLandDist);
+                float dist  = Random.Range(1.35f, maxLandDist);
                 Vector3 candidate = new Vector3(
                     lastBounce.x + Mathf.Cos(angle) * dist,
                     boardY,
@@ -1308,9 +1334,16 @@ public class DiceBox3D : MonoBehaviour
             }
             landPos[i] = landPosI;
             // 윗면은 고정, Y축(수직)으로 랜덤 회전 추가 → 반듯하게 멈추지 않음
-            float randomYaw = Random.Range(0f, 360f);
-            landRot[i] = Quaternion.AngleAxis(randomYaw, Vector3.up) * _dice[i].FaceUpRotation(finalValues[i]);
             path.Add(landPosI);
+            path = CompactShortSegments(path, 0.7f, leftX + pad, rightX - pad, bottomZ + pad, topZ - pad, boardY);
+            int plannerSegments = Mathf.Max(1, path.Count - 1);
+            float maxSegmentDistance = Mathf.Max(2.25f, GetDieEdgeLength(i) * 3.0f);
+            path = SubdivideLongSegments(path, maxSegmentDistance, boardY);
+            landPosI = path[path.Count - 1];
+            landPos[i] = landPosI;
+
+            Quaternion startRotI = SelectStartRotationForTarget(i, path, finalValues[i], out Quaternion finalLandRotation);
+            landRot[i] = finalLandRotation;
 
             // 속도: 바운스 많을수록 빠름
             float segDur = Mathf.Lerp(0.76f, 0.40f, (dieBounce - 2f) / 3f);
@@ -1323,7 +1356,28 @@ public class DiceBox3D : MonoBehaviour
             float spinDeg  = 120f / avgSeg;
             float spinDecay = 0.7f;
 
-            perDie[i] = (path, landRot[i], segDur, baseArc, arcDecay, Vector3.zero, spinDeg, spinDecay);
+            Vector3 settlePos = landPosI;
+            if (path.Count >= 2 && Random.value < 0.48f)
+            {
+                Vector3 slideDir = (path[path.Count - 1] - path[path.Count - 2]);
+                slideDir.y = 0f;
+                if (slideDir.sqrMagnitude > 0.0001f)
+                {
+                    slideDir.Normalize();
+                    Vector3 side = Vector3.Cross(Vector3.up, slideDir).normalized;
+                    float sideMix = Random.Range(-0.22f, 0.22f);
+                    slideDir = (slideDir + side * sideMix).normalized;
+
+                    float edgeLength = GetDieEdgeLength(i);
+                    float slideDistance = Random.Range(edgeLength * 0.18f, edgeLength * 0.5f) * Mathf.Lerp(0.95f, 1.18f, gaugeValue);
+                    settlePos += slideDir * slideDistance;
+                    settlePos.x = Mathf.Clamp(settlePos.x, leftX + pad, rightX - pad);
+                    settlePos.z = Mathf.Clamp(settlePos.z, bottomZ + pad, topZ - pad);
+                    settlePos.y = boardY;
+                }
+            }
+
+            perDie[i] = (path, startRotI, landRot[i], settlePos, plannerSegments, segDur, baseArc, arcDecay, Vector3.zero, spinDeg, spinDecay);
         }
 
         // ── 게임 Random 상태 복원 ─────────────────────────────────────
@@ -1337,22 +1391,21 @@ public class DiceBox3D : MonoBehaviour
 
             SetState(i, DiceState.Throwing);
             _dice[i].transform.position = p.path[0];
-            _dice[i].transform.rotation = Quaternion.Euler(
-                Random.Range(0f, 360f), Random.Range(0f, 360f), Random.Range(0f, 360f));
+            _dice[i].transform.rotation = p.startRot;
             var rb = _dice[i].GetComponent<Rigidbody>();
             if (rb != null) rb.isKinematic = true;
             _dice[i].gameObject.SetActive(true);
 
             int captured = i;
-            StartCoroutine(AnimateSingleDieCo(
-                captured, p.path, p.landRot, boardY,
-                p.segDur, p.initArc, p.arcDecay,
+            StartCoroutine(AnimateSingleDieEdgeRollCo(
+                captured, p.path, p.landRot, p.settlePos, boardY,
+                p.plannerSegments, p.segDur, p.initArc, p.arcDecay,
                 p.spinAxis, p.spinDeg, p.spinDecay,
                 () => doneCount++));
         }
 
         yield return new WaitUntil(() => doneCount >= n);
-        yield return new WaitForSeconds(1f);
+        yield return new WaitForSeconds(0.28f);
 
         // 값 확정 + OnBoard 상태로 전환 (주사위는 아직 보임 — LineupDice가 이동 후 숨김)
         foreach (int i in sortedIndices)
@@ -1363,10 +1416,120 @@ public class DiceBox3D : MonoBehaviour
             _dice[i].gameObject.SetActive(true);  // LineupDice 이동용으로 활성 유지
         }
 
-        yield return StartCoroutine(LineupDice(keepFlags));
+        yield return StartCoroutine(LineupDice(keepFlags, finalValues));
         ShowDiceOverlays(keepFlags);
         EnableDiceClicking();
         OnDiceLineupComplete?.Invoke();
+    }
+
+    IEnumerator AnimateSingleDieEdgeRollCo(
+        int dieIndex,
+        System.Collections.Generic.List<Vector3> path,
+        Quaternion landRot,
+        Vector3 settlePos,
+        float boardY,
+        int plannerSegments,
+        float segDuration,
+        float initArc,
+        float arcDecay,
+        Vector3 _unused,
+        float spinDegPerSec,
+        float spinDecay,
+        System.Action onDone)
+    {
+        float edgeLength = GetDieEdgeLength(dieIndex);
+        float curArc = initArc * 0.35f;
+        Vector3 lastRollDirection = Vector3.left;
+        float totalPathDistance = TotalPathDistance(path);
+        float desiredTotalDuration = EstimateDesiredEdgeRollDuration(segDuration, plannerSegments);
+        float weightedDistance = 0f;
+
+        for (int seg = 0; seg < path.Count - 1; seg++)
+        {
+            Vector3 from = path[seg];
+            Vector3 to = path[seg + 1];
+            from.y = boardY;
+            to.y = boardY;
+
+            float segmentDistance = Vector3.Distance(from, to);
+            if (segmentDistance <= 0.001f)
+                continue;
+
+            float segmentMidProgress = totalPathDistance > 0.001f
+                ? (DistanceAlongPath(path, seg) + segmentDistance * 0.5f) / totalPathDistance
+                : 0f;
+            float speedFactor = EvaluateRollSpeedFactor(segmentMidProgress);
+            weightedDistance += segmentDistance / Mathf.Max(speedFactor, 0.01f);
+        }
+
+        float targetUnitsPerSecond = desiredTotalDuration > 0.001f
+            ? weightedDistance / desiredTotalDuration
+            : 1f;
+        float travelledDistance = 0f;
+
+        int totalSegs = path.Count - 1;
+        for (int seg = 0; seg < totalSegs; seg++)
+        {
+            bool isLastSeg = seg == totalSegs - 1;
+
+            Vector3 fromPos = _dice[dieIndex].transform.position;
+            Vector3 toPos = path[seg + 1];
+            fromPos.y = boardY;
+            toPos.y = boardY;
+
+            Vector3 flatDelta = toPos - fromPos;
+            flatDelta.y = 0f;
+            float segmentDistance = flatDelta.magnitude;
+            if (segmentDistance <= 0.001f)
+                continue;
+
+            Vector3 rollDirection = flatDelta.normalized;
+            Vector3 rollAxis = Vector3.Cross(Vector3.up, rollDirection);
+            if (rollAxis.sqrMagnitude <= 0.0001f)
+                rollAxis = Vector3.right;
+            else
+                rollAxis.Normalize();
+
+            float segmentMidProgress = totalPathDistance > 0.001f
+                ? (travelledDistance + segmentDistance * 0.5f) / totalPathDistance
+                : 0f;
+            float speedFactor = EvaluateRollSpeedFactor(segmentMidProgress);
+            float duration = (segmentDistance / Mathf.Max(speedFactor, 0.01f)) / Mathf.Max(targetUnitsPerSecond, 0.01f);
+            duration = Mathf.Max(0.075f, duration);
+            float totalRollAngle = (segmentDistance / Mathf.Max(edgeLength, 0.001f)) * 90f;
+
+            float elapsed = 0f;
+            float lastMoveProgress = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                float raw = Mathf.Clamp01(elapsed / duration);
+                float moveProgress = isLastSeg
+                    ? Mathf.Lerp(raw, EaseOut(raw), 0.28f)
+                    : raw;
+
+                Vector3 flatPos = Vector3.Lerp(fromPos, toPos, moveProgress);
+                float arc = Mathf.Sin(Mathf.PI * raw) * curArc;
+                _dice[dieIndex].transform.position = new Vector3(flatPos.x, boardY + arc, flatPos.z);
+
+                float deltaAngle = totalRollAngle * (moveProgress - lastMoveProgress);
+                _dice[dieIndex].transform.rotation =
+                    Quaternion.AngleAxis(deltaAngle, rollAxis) *
+                    _dice[dieIndex].transform.rotation;
+
+                lastMoveProgress = moveProgress;
+                yield return null;
+            }
+
+            _dice[dieIndex].transform.position = new Vector3(toPos.x, boardY, toPos.z);
+            lastRollDirection = rollDirection;
+            curArc *= arcDecay;
+            travelledDistance += segmentDistance;
+        }
+
+        settlePos.y = boardY;
+        yield return StartCoroutine(SettleDieToRestCo(dieIndex, settlePos, landRot, lastRollDirection));
+        onDone?.Invoke();
     }
 
     IEnumerator AnimateSingleDieCo(
@@ -1384,18 +1547,24 @@ public class DiceBox3D : MonoBehaviour
     {
         float curArc  = initArc;
         float curSpin = spinDegPerSec;
+        float avgSegmentDistance = AverageSegmentDistance(path);
 
         int totalSegs = path.Count - 1;
         for (int seg = 0; seg < totalSegs; seg++)
         {
             bool  isLastSeg = seg == totalSegs - 1;
-            float duration  = isLastSeg
+            float durationBase  = isLastSeg
                 ? segDuration * 1.3f
                 : segDuration * Mathf.Pow(1.25f, seg) * 0.65f;
 
             Vector3    fromPos = _dice[dieIndex].transform.position;
             Vector3    toPos   = path[seg + 1];
             Quaternion fromRot = _dice[dieIndex].transform.rotation;
+            float segmentDistance = Vector3.Distance(fromPos, toPos);
+            float durationScale = avgSegmentDistance > 0.001f
+                ? Mathf.Clamp(segmentDistance / avgSegmentDistance, 0.55f, 1.65f)
+                : 1f;
+            float duration = durationBase * durationScale;
 
             // ── 이동 방향 기반 롤 축 계산 ────────────────────────────
             Vector3 movDir = toPos - fromPos;
@@ -1417,6 +1586,7 @@ public class DiceBox3D : MonoBehaviour
             // landRot의 Y축 90° 회전 변형 4가지 중, rollAxis 기준 전진 방향(signed 0°~180°)인
             // 후보만 골라 가장 가까운 것 선택 → Slerp이 굴러오던 방향과 같은 방향으로 회전
             Quaternion targetRot = landRot;
+            float targetRollAngle = 0f;
             if (isLastSeg)
             {
                 // rollAxis에 수직인 참조 벡터 (fromRot 기준)
@@ -1439,11 +1609,13 @@ public class DiceBox3D : MonoBehaviour
                     {
                         bestAngle  = signed;
                         targetRot  = candidate;
+                        targetRollAngle = signed;
                     }
                 }
             }
 
             float elapsed = 0f;
+            float lastRollProgress = 0f;
             while (elapsed < duration)
             {
                 elapsed += Time.deltaTime;
@@ -1457,7 +1629,12 @@ public class DiceBox3D : MonoBehaviour
                 if (isLastSeg)
                 {
                     // fromRot → targetRot EaseOut Slerp
-                    _dice[dieIndex].transform.rotation = Quaternion.Slerp(fromRot, targetRot, EaseOut(raw));
+                    float rollProgress = EaseOut(raw);
+                    float deltaAngle = targetRollAngle * (rollProgress - lastRollProgress);
+                    _dice[dieIndex].transform.rotation =
+                        Quaternion.AngleAxis(deltaAngle, rollAxis) *
+                        _dice[dieIndex].transform.rotation;
+                    lastRollProgress = rollProgress;
                 }
                 else
                 {
@@ -1470,8 +1647,9 @@ public class DiceBox3D : MonoBehaviour
             }
 
             _dice[dieIndex].transform.position = new Vector3(toPos.x, boardY, toPos.z);
+            if (isLastSeg)
+                yield return StartCoroutine(SettleDieToRestCo(dieIndex, toPos, landRot, movDir));
             // 마지막 구간 끝: targetRot으로 확정 (bestTotalAngle 도달 지점과 근사)
-            if (isLastSeg) _dice[dieIndex].transform.rotation = targetRot;
 
             // 바운스마다 아크·회전 감쇠
             curArc  *= arcDecay;
@@ -1482,6 +1660,649 @@ public class DiceBox3D : MonoBehaviour
     }
 
     // ── 유틸 ─────────────────────────────────────────────────────────
+    struct DieFaceState
+    {
+        public int top;
+        public int bottom;
+        public int left;
+        public int right;
+        public int forward;
+        public int back;
+    }
+
+    Quaternion SelectStartRotationForTarget(int dieIndex, System.Collections.Generic.List<Vector3> path, int targetFace, out Quaternion finalRotation)
+    {
+        finalRotation = _dice[dieIndex] != null
+            ? Quaternion.AngleAxis(Random.Range(0f, 360f), Vector3.up) * _dice[dieIndex].FaceUpRotation(targetFace)
+            : Quaternion.identity;
+        if (_dice[dieIndex] == null)
+            return Quaternion.identity;
+
+        float edgeLength = GetDieEdgeLength(dieIndex);
+        Quaternion accumulatedRoll = CalculateAccumulatedRollRotation(path, edgeLength);
+        return Quaternion.Inverse(accumulatedRoll) * finalRotation;
+    }
+
+    Quaternion CalculateAccumulatedRollRotation(System.Collections.Generic.List<Vector3> path, float edgeLength)
+    {
+        Quaternion accumulated = Quaternion.identity;
+        if (path == null || path.Count < 2) return accumulated;
+
+        float safeEdge = Mathf.Max(edgeLength, 0.001f);
+        for (int i = 1; i < path.Count; i++)
+        {
+            Vector3 delta = path[i] - path[i - 1];
+            delta.y = 0f;
+            float distance = delta.magnitude;
+            if (distance <= 0.001f) continue;
+
+            Vector3 rollDirection = delta / distance;
+            Vector3 rollAxis = Vector3.Cross(Vector3.up, rollDirection);
+            if (rollAxis.sqrMagnitude <= 0.0001f) continue;
+
+            rollAxis.Normalize();
+            float angle = (distance / safeEdge) * 90f;
+            accumulated = Quaternion.AngleAxis(angle, rollAxis) * accumulated;
+        }
+
+        return accumulated;
+    }
+
+    System.Collections.Generic.List<Quaternion> EnumerateStableRotations(int dieIndex)
+    {
+        var rotations = new System.Collections.Generic.List<Quaternion>(24);
+        if (_dice[dieIndex] == null) return rotations;
+
+        for (int face = 1; face <= 6; face++)
+        {
+            Quaternion faceRotation = _dice[dieIndex].FaceUpRotation(face);
+            for (int yawStep = 0; yawStep < 4; yawStep++)
+                rotations.Add(Quaternion.AngleAxis(90f * yawStep, Vector3.up) * faceRotation);
+        }
+
+        return rotations;
+    }
+
+    DieFaceState CaptureFaceState(int dieIndex, Quaternion rotation)
+    {
+        return new DieFaceState
+        {
+            top = GetFaceForWorldDirection(dieIndex, rotation, Vector3.up),
+            bottom = GetFaceForWorldDirection(dieIndex, rotation, Vector3.down),
+            left = GetFaceForWorldDirection(dieIndex, rotation, Vector3.left),
+            right = GetFaceForWorldDirection(dieIndex, rotation, Vector3.right),
+            forward = GetFaceForWorldDirection(dieIndex, rotation, Vector3.forward),
+            back = GetFaceForWorldDirection(dieIndex, rotation, Vector3.back),
+        };
+    }
+
+    int GetFaceForWorldDirection(int dieIndex, Quaternion rotation, Vector3 worldDirection)
+    {
+        if (_dice[dieIndex] == null) return 1;
+
+        var die = _dice[dieIndex];
+        Vector3 dir = worldDirection.normalized;
+        var axes = new (Vector3 worldDir, int face)[]
+        {
+            (rotation * Vector3.up, die.faceLocalUp),
+            (rotation * Vector3.down, die.faceLocalDown),
+            (rotation * Vector3.right, die.faceLocalRight),
+            (rotation * Vector3.left, die.faceLocalLeft),
+            (rotation * Vector3.forward, die.faceLocalForward),
+            (rotation * Vector3.back, die.faceLocalBack),
+        };
+
+        int bestFace = 1;
+        float bestDot = -2f;
+        foreach (var (axisWorldDir, face) in axes)
+        {
+            float dot = Vector3.Dot(axisWorldDir, dir);
+            if (dot > bestDot)
+            {
+                bestDot = dot;
+                bestFace = face;
+            }
+        }
+
+        return bestFace;
+    }
+
+    System.Collections.Generic.List<Vector3> BuildLogicalRollPlan(System.Collections.Generic.List<Vector3> path, float edgeLength)
+    {
+        var plan = new System.Collections.Generic.List<Vector3>();
+        if (path == null || path.Count < 2) return plan;
+
+        float safeEdge = Mathf.Max(edgeLength, 0.001f);
+        for (int i = 1; i < path.Count; i++)
+        {
+            Vector3 delta = path[i] - path[i - 1];
+            delta.y = 0f;
+
+            int stepsX = Mathf.RoundToInt(Mathf.Abs(delta.x) / safeEdge);
+            int stepsZ = Mathf.RoundToInt(Mathf.Abs(delta.z) / safeEdge);
+
+            if (stepsX == 0 && stepsZ == 0 && delta.sqrMagnitude > (safeEdge * 0.2f) * (safeEdge * 0.2f))
+            {
+                if (Mathf.Abs(delta.x) >= Mathf.Abs(delta.z))
+                    stepsX = 1;
+                else
+                    stepsZ = 1;
+            }
+
+            int doneX = 0;
+            int doneZ = 0;
+            float signX = Mathf.Sign(Mathf.Approximately(delta.x, 0f) ? 1f : delta.x);
+            float signZ = Mathf.Sign(Mathf.Approximately(delta.z, 0f) ? 1f : delta.z);
+
+            while (doneX < stepsX || doneZ < stepsZ)
+            {
+                if (doneX >= stepsX)
+                {
+                    plan.Add(new Vector3(0f, 0f, signZ));
+                    doneZ++;
+                    continue;
+                }
+
+                if (doneZ >= stepsZ)
+                {
+                    plan.Add(new Vector3(signX, 0f, 0f));
+                    doneX++;
+                    continue;
+                }
+
+                float nextXProgress = (doneX + 1f) / Mathf.Max(stepsX, 1);
+                float nextZProgress = (doneZ + 1f) / Mathf.Max(stepsZ, 1);
+
+                if (nextXProgress <= nextZProgress)
+                {
+                    plan.Add(new Vector3(signX, 0f, 0f));
+                    doneX++;
+                }
+                else
+                {
+                    plan.Add(new Vector3(0f, 0f, signZ));
+                    doneZ++;
+                }
+            }
+        }
+
+        return plan;
+    }
+
+    void SimulateRollPlan(ref DieFaceState state, System.Collections.Generic.List<Vector3> rollPlan)
+    {
+        if (rollPlan == null) return;
+
+        for (int i = 0; i < rollPlan.Count; i++)
+            ApplyRollToState(ref state, rollPlan[i]);
+    }
+
+    void ApplyRollToState(ref DieFaceState state, Vector3 direction)
+    {
+        if (Mathf.Abs(direction.x) >= Mathf.Abs(direction.z))
+        {
+            if (direction.x >= 0f) RollStatePositiveX(ref state);
+            else RollStateNegativeX(ref state);
+        }
+        else
+        {
+            if (direction.z >= 0f) RollStatePositiveZ(ref state);
+            else RollStateNegativeZ(ref state);
+        }
+    }
+
+    void RollStatePositiveX(ref DieFaceState state)
+    {
+        int oldTop = state.top;
+        int oldBottom = state.bottom;
+        int oldLeft = state.left;
+        int oldRight = state.right;
+
+        state.top = oldLeft;
+        state.bottom = oldRight;
+        state.left = oldBottom;
+        state.right = oldTop;
+    }
+
+    void RollStateNegativeX(ref DieFaceState state)
+    {
+        int oldTop = state.top;
+        int oldBottom = state.bottom;
+        int oldLeft = state.left;
+        int oldRight = state.right;
+
+        state.top = oldRight;
+        state.bottom = oldLeft;
+        state.left = oldTop;
+        state.right = oldBottom;
+    }
+
+    void RollStatePositiveZ(ref DieFaceState state)
+    {
+        int oldTop = state.top;
+        int oldBottom = state.bottom;
+        int oldForward = state.forward;
+        int oldBack = state.back;
+
+        state.top = oldBack;
+        state.bottom = oldForward;
+        state.forward = oldTop;
+        state.back = oldBottom;
+    }
+
+    void RollStateNegativeZ(ref DieFaceState state)
+    {
+        int oldTop = state.top;
+        int oldBottom = state.bottom;
+        int oldForward = state.forward;
+        int oldBack = state.back;
+
+        state.top = oldForward;
+        state.bottom = oldBack;
+        state.forward = oldBottom;
+        state.back = oldTop;
+    }
+
+    Quaternion FindRotationForState(int dieIndex, DieFaceState targetState)
+    {
+        foreach (Quaternion candidate in EnumerateStableRotations(dieIndex))
+        {
+            DieFaceState candidateState = CaptureFaceState(dieIndex, candidate);
+            if (candidateState.top == targetState.top &&
+                candidateState.bottom == targetState.bottom &&
+                candidateState.left == targetState.left &&
+                candidateState.right == targetState.right &&
+                candidateState.forward == targetState.forward &&
+                candidateState.back == targetState.back)
+            {
+                return candidate;
+            }
+        }
+
+        return _dice[dieIndex] != null ? _dice[dieIndex].FaceUpRotation(targetState.top) : Quaternion.identity;
+    }
+
+    Quaternion GetRandomRollStartRotation(int dieIndex)
+    {
+        if (_dice[dieIndex] == null) return Quaternion.identity;
+
+        int face = Random.Range(1, 7);
+        float yaw = Random.Range(0f, 360f);
+        return Quaternion.AngleAxis(yaw, Vector3.up) * _dice[dieIndex].FaceUpRotation(face);
+    }
+
+    float GetDieEdgeLength(int dieIndex)
+    {
+        if (dieIndex < 0 || dieIndex >= _dice.Length || _dice[dieIndex] == null)
+            return 0.75f;
+
+        if (_dieEdgeLengths[dieIndex] > 0.001f)
+            return _dieEdgeLengths[dieIndex];
+
+        float edgeLength = 0.75f;
+        var meshFilter = _dice[dieIndex].GetComponentInChildren<MeshFilter>(true);
+        if (meshFilter != null && meshFilter.sharedMesh != null)
+        {
+            Vector3 meshSize = meshFilter.sharedMesh.bounds.size;
+            Vector3 scale = meshFilter.transform.lossyScale;
+            edgeLength = Mathf.Max(
+                Mathf.Abs(meshSize.x * scale.x),
+                Mathf.Abs(meshSize.y * scale.y),
+                Mathf.Abs(meshSize.z * scale.z));
+        }
+        else
+        {
+            var renderer = _dice[dieIndex].GetComponentInChildren<Renderer>(true);
+            if (renderer != null)
+            {
+                Vector3 size = renderer.bounds.size;
+                edgeLength = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
+            }
+        }
+
+        _dieEdgeLengths[dieIndex] = Mathf.Max(0.1f, edgeLength);
+        return _dieEdgeLengths[dieIndex];
+    }
+
+    System.Collections.Generic.List<Vector3> BuildRollDirections(Vector3 flatDelta, float edgeLength)
+    {
+        var directions = new System.Collections.Generic.List<Vector3>();
+        float threshold = edgeLength * 0.45f;
+        float remainingX = flatDelta.x;
+        float remainingZ = flatDelta.z;
+        int safety = 0;
+
+        while ((Mathf.Abs(remainingX) >= threshold || Mathf.Abs(remainingZ) >= threshold) && safety++ < 64)
+        {
+            bool takeX = Mathf.Abs(remainingX) >= Mathf.Abs(remainingZ);
+            if (takeX && Mathf.Abs(remainingX) >= threshold)
+            {
+                float sign = Mathf.Sign(remainingX);
+                directions.Add(new Vector3(sign, 0f, 0f));
+                remainingX -= sign * edgeLength;
+                continue;
+            }
+
+            if (Mathf.Abs(remainingZ) >= threshold)
+            {
+                float sign = Mathf.Sign(remainingZ);
+                directions.Add(new Vector3(0f, 0f, sign));
+                remainingZ -= sign * edgeLength;
+            }
+        }
+
+        return directions;
+    }
+
+    IEnumerator RollDieStepCo(int dieIndex, Vector3 direction, float edgeLength, float boardY, float duration)
+    {
+        if (_dice[dieIndex] == null) yield break;
+
+        Transform dieTransform = _dice[dieIndex].transform;
+        Vector3 stepDirection = direction.normalized;
+        if (stepDirection.sqrMagnitude <= 0.001f) yield break;
+
+        Vector3 startPos = dieTransform.position;
+        startPos.y = boardY;
+        Quaternion startRot = dieTransform.rotation;
+
+        float halfEdge = edgeLength * 0.5f;
+        Vector3 axis = Vector3.Cross(Vector3.up, stepDirection).normalized;
+        Vector3 pivot = startPos + stepDirection * halfEdge + Vector3.down * halfEdge;
+
+        float elapsed = 0f;
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = EaseInOut(Mathf.Clamp01(elapsed / duration));
+            Quaternion stepRotation = Quaternion.AngleAxis(90f * t, axis);
+            dieTransform.position = pivot + stepRotation * (startPos - pivot);
+            dieTransform.rotation = stepRotation * startRot;
+            yield return null;
+        }
+
+        Quaternion finalRotation = Quaternion.AngleAxis(90f, axis) * startRot;
+        Vector3 finalPosition = startPos + stepDirection * edgeLength;
+        finalPosition.y = boardY;
+
+        dieTransform.position = finalPosition;
+        dieTransform.rotation = finalRotation;
+    }
+
+    IEnumerator SettleDieToRestCo(int dieIndex, Vector3 restPos, Quaternion baseRestRotation, Vector3 lastMoveDirection)
+    {
+        if (_dice[dieIndex] == null) yield break;
+
+        Transform dieTransform = _dice[dieIndex].transform;
+        Quaternion startRot = dieTransform.rotation;
+        Quaternion targetRot = GetNaturalRestRotation(startRot, baseRestRotation);
+        float angle = Quaternion.Angle(startRot, targetRot);
+        Vector3 startPos = dieTransform.position;
+
+        Vector3 targetPos = restPos;
+        targetPos.y = restPos.y;
+
+        Vector3 finalMoveDirection = lastMoveDirection;
+        finalMoveDirection.y = 0f;
+        if (finalMoveDirection.sqrMagnitude <= 0.0001f)
+            finalMoveDirection = targetPos - startPos;
+        finalMoveDirection.y = 0f;
+
+        bool hasFinalMoveDirection = finalMoveDirection.sqrMagnitude > 0.0001f;
+        if (hasFinalMoveDirection)
+            finalMoveDirection.Normalize();
+
+        float slideDistance = Vector3.Distance(startPos, targetPos);
+        bool hasVisibleSlide = slideDistance >= 0.04f;
+        float edgeLength = GetDieEdgeLength(dieIndex);
+        float overshootDistance = hasFinalMoveDirection
+            ? (hasVisibleSlide
+                ? Mathf.Min(edgeLength * 0.32f, Mathf.Max(0.05f, slideDistance * 0.48f))
+                : edgeLength * 0.11f)
+            : 0f;
+        bool hasOvershoot = overshootDistance >= 0.01f;
+
+        if (angle <= 0.1f && !hasVisibleSlide && !hasOvershoot)
+        {
+            dieTransform.position = targetPos;
+            dieTransform.rotation = targetRot;
+            yield break;
+        }
+
+        float angleFactor = Mathf.Clamp01(angle / 55f);
+        float slideFactor = Mathf.Clamp01(slideDistance / 0.24f);
+
+        float settleDuration = Mathf.Lerp(0.04f, 0.08f, angleFactor);
+        Vector3 settlePos = hasVisibleSlide
+            ? Vector3.Lerp(startPos, targetPos, 0.18f)
+            : targetPos;
+
+        float elapsed = 0f;
+        while (elapsed < settleDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = EaseOut(Mathf.Clamp01(elapsed / settleDuration));
+            dieTransform.position = Vector3.Lerp(startPos, settlePos, t);
+            dieTransform.rotation = Quaternion.Slerp(startRot, targetRot, t);
+            yield return null;
+        }
+
+        dieTransform.position = settlePos;
+        dieTransform.rotation = targetRot;
+
+        if (!hasVisibleSlide && !hasOvershoot)
+            yield break;
+
+        Vector3 approachTargetPos = hasOvershoot
+            ? targetPos + finalMoveDirection * overshootDistance
+            : targetPos;
+
+        float slideDuration = hasVisibleSlide
+            ? Mathf.Lerp(0.11f, 0.2f, slideFactor)
+            : Mathf.Lerp(0.05f, 0.09f, Mathf.Clamp01(overshootDistance / Mathf.Max(edgeLength * 0.32f, 0.001f)));
+        elapsed = 0f;
+        Vector3 slideStartPos = dieTransform.position;
+
+        while (elapsed < slideDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = EaseOut(Mathf.Clamp01(elapsed / slideDuration));
+            dieTransform.position = Vector3.Lerp(slideStartPos, approachTargetPos, t);
+            dieTransform.rotation = targetRot;
+            yield return null;
+        }
+
+        dieTransform.position = approachTargetPos;
+        dieTransform.rotation = targetRot;
+
+        if (!hasOvershoot)
+        {
+            dieTransform.position = targetPos;
+            dieTransform.rotation = targetRot;
+            yield break;
+        }
+
+        float reboundDuration = Mathf.Lerp(0.05f, 0.1f, Mathf.Clamp01(overshootDistance / Mathf.Max(edgeLength * 0.32f, 0.001f)));
+        elapsed = 0f;
+        Vector3 reboundStartPos = dieTransform.position;
+
+        while (elapsed < reboundDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = EaseOut(Mathf.Clamp01(elapsed / reboundDuration));
+            dieTransform.position = Vector3.Lerp(reboundStartPos, targetPos, t);
+            dieTransform.rotation = targetRot;
+            yield return null;
+        }
+
+        dieTransform.position = targetPos;
+        dieTransform.rotation = targetRot;
+    }
+
+    Quaternion GetNaturalRestRotation(Quaternion currentRotation, Quaternion baseRestRotation)
+    {
+        Vector3 localReferenceAxis = GetRestReferenceLocalAxis(baseRestRotation);
+        Vector3 baseReference = Vector3.ProjectOnPlane(baseRestRotation * localReferenceAxis, Vector3.up);
+        Vector3 currentReference = Vector3.ProjectOnPlane(currentRotation * localReferenceAxis, Vector3.up);
+
+        if (baseReference.sqrMagnitude <= 0.0001f || currentReference.sqrMagnitude <= 0.0001f)
+            return baseRestRotation;
+
+        float yawDelta = Vector3.SignedAngle(baseReference.normalized, currentReference.normalized, Vector3.up);
+        return Quaternion.AngleAxis(yawDelta, Vector3.up) * baseRestRotation;
+    }
+
+    Vector3 GetRestReferenceLocalAxis(Quaternion baseRestRotation)
+    {
+        Vector3 bestAxis = Vector3.forward;
+        float bestMagnitude = 0f;
+        Vector3[] candidates = { Vector3.forward, Vector3.right, Vector3.back, Vector3.left };
+
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            Vector3 projected = Vector3.ProjectOnPlane(baseRestRotation * candidates[i], Vector3.up);
+            float magnitude = projected.sqrMagnitude;
+            if (magnitude > bestMagnitude)
+            {
+                bestMagnitude = magnitude;
+                bestAxis = candidates[i];
+            }
+        }
+
+        return bestAxis;
+    }
+
+    System.Collections.Generic.List<Vector3> CompactShortSegments(
+        System.Collections.Generic.List<Vector3> path,
+        float minSegmentDistance,
+        float leftX,
+        float rightX,
+        float bottomZ,
+        float topZ,
+        float boardY)
+    {
+        if (path == null || path.Count <= 2) return path;
+
+        var compacted = new System.Collections.Generic.List<Vector3> { path[0] };
+        for (int i = 1; i < path.Count; i++)
+        {
+            Vector3 current = path[i];
+            Vector3 last = compacted[compacted.Count - 1];
+            bool isLast = i == path.Count - 1;
+
+            if (Vector3.Distance(last, current) >= minSegmentDistance)
+            {
+                compacted.Add(current);
+                continue;
+            }
+
+            if (!isLast) continue;
+
+            Vector3 pushDir = compacted.Count >= 2
+                ? (last - compacted[compacted.Count - 2]).normalized
+                : (current - last).normalized;
+
+            if (pushDir.sqrMagnitude < 0.001f)
+                pushDir = Vector3.left;
+
+            Vector3 nudged = last + pushDir * minSegmentDistance;
+            nudged.x = Mathf.Clamp(nudged.x, leftX, rightX);
+            nudged.z = Mathf.Clamp(nudged.z, bottomZ, topZ);
+            nudged.y = boardY;
+            compacted.Add(nudged);
+        }
+
+        return compacted.Count >= 2 ? compacted : path;
+    }
+
+    System.Collections.Generic.List<Vector3> SubdivideLongSegments(
+        System.Collections.Generic.List<Vector3> path,
+        float maxSegmentDistance,
+        float boardY)
+    {
+        if (path == null || path.Count <= 1) return path;
+        if (maxSegmentDistance <= 0.001f) return path;
+
+        var subdivided = new System.Collections.Generic.List<Vector3> { path[0] };
+        for (int i = 1; i < path.Count; i++)
+        {
+            Vector3 from = subdivided[subdivided.Count - 1];
+            Vector3 to = path[i];
+            float distance = Vector3.Distance(from, to);
+
+            if (distance <= maxSegmentDistance)
+            {
+                subdivided.Add(to);
+                continue;
+            }
+
+            int steps = Mathf.CeilToInt(distance / maxSegmentDistance);
+            for (int step = 1; step <= steps; step++)
+            {
+                float t = step / (float)steps;
+                Vector3 point = Vector3.Lerp(from, to, t);
+                point.y = boardY;
+                subdivided.Add(point);
+            }
+        }
+
+        return subdivided;
+    }
+
+    float TotalPathDistance(System.Collections.Generic.List<Vector3> path)
+    {
+        if (path == null || path.Count < 2) return 0f;
+
+        float total = 0f;
+        for (int i = 1; i < path.Count; i++)
+            total += Vector3.Distance(path[i - 1], path[i]);
+
+        return total;
+    }
+
+    float DistanceAlongPath(System.Collections.Generic.List<Vector3> path, int segmentExclusiveEnd)
+    {
+        if (path == null || path.Count < 2 || segmentExclusiveEnd <= 0) return 0f;
+
+        float total = 0f;
+        int maxSegment = Mathf.Min(segmentExclusiveEnd, path.Count - 1);
+        for (int i = 1; i <= maxSegment; i++)
+            total += Vector3.Distance(path[i - 1], path[i]);
+
+        return total;
+    }
+
+    float EstimateDesiredEdgeRollDuration(float segDuration, int plannerSegments)
+    {
+        float effectiveSegments = Mathf.Clamp(plannerSegments, 2, 6);
+        return segDuration * (effectiveSegments * 0.72f + 0.95f);
+    }
+
+    float EvaluateRollSpeedFactor(float progress)
+    {
+        float shaped = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(progress));
+        return Mathf.Lerp(1.34f, 0.58f, shaped);
+    }
+
+    float ApplyRollProgressCurve(float t, float overallProgress, bool isLastSegment)
+    {
+        float clamped = Mathf.Clamp01(t);
+        float lateBlend = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.45f, 1f, overallProgress));
+        float curved = Mathf.Lerp(clamped, EaseOut(clamped), lateBlend);
+        return isLastSegment ? EaseOut(curved) : curved;
+    }
+
+    float AverageSegmentDistance(System.Collections.Generic.List<Vector3> path)
+    {
+        if (path == null || path.Count < 2) return 0f;
+
+        float total = 0f;
+        for (int i = 1; i < path.Count; i++)
+            total += Vector3.Distance(path[i - 1], path[i]);
+
+        return total / (path.Count - 1);
+    }
+
     static float EaseInOut(float t) => t * t * (3f - 2f * t);
     static float EaseIn(float t)    => t * t;           // 가속 (벽 도달 시 빠름 → 자연스러운 튕김)
     static float EaseOut(float t)   => t * (2f - t);    // 감속 (착지 시 부드럽게 정착)

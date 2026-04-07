@@ -35,6 +35,7 @@ public class UICupShaker : MonoBehaviour, IPointerDownHandler, IPointerUpHandler
     private bool _suppressNetworkBroadcast;
 
     public float LastGaugeValue { get; private set; } = 1f;
+    public System.Action OnShakeStarted;
 
     void Awake()
     {
@@ -138,6 +139,8 @@ public class UICupShaker : MonoBehaviour, IPointerDownHandler, IPointerUpHandler
         _shakeRoutine = suppressNetworkBroadcast
             ? StartCoroutine(ShakeCoroutineVisualOnly())
             : StartCoroutine(ShakeCoroutine());
+
+        OnShakeStarted?.Invoke();
 
         _diceBox3D?.ClearNonKeptOverlays();
         _diceBox3D?.ShowNonKeptCupDice();
